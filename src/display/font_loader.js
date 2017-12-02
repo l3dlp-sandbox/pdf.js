@@ -12,26 +12,10 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-/* globals FontFace */
 
-'use strict';
-
-(function (root, factory) {
-  if (typeof define === 'function' && define.amd) {
-    define('pdfjs/display/font_loader', ['exports', 'pdfjs/shared/util'],
-      factory);
-  } else if (typeof exports !== 'undefined') {
-    factory(exports, require('../shared/util.js'));
-  } else {
-    factory((root.pdfjsDisplayFontLoader = {}), root.pdfjsSharedUtil);
-  }
-}(this, function (exports, sharedUtil) {
-
-var assert = sharedUtil.assert;
-var bytesToString = sharedUtil.bytesToString;
-var string32 = sharedUtil.string32;
-var shadow = sharedUtil.shadow;
-var warn = sharedUtil.warn;
+import {
+  assert, bytesToString, isEvalSupported, shadow, string32, warn
+} from '../shared/util';
 
 function FontLoader(docId) {
   this.docId = docId;
@@ -41,7 +25,7 @@ function FontLoader(docId) {
     this.loadTestFontId = 0;
     this.loadingContext = {
       requests: [],
-      nextRequestId: 0
+      nextRequestId: 0,
     };
   }
 }
@@ -60,10 +44,10 @@ FontLoader.prototype = {
   },
 
   clear: function fontLoaderClear() {
-    var styleElement = this.styleElement;
-    if (styleElement) {
-      styleElement.parentNode.removeChild(styleElement);
-      styleElement = this.styleElement = null;
+    if (this.styleElement) {
+      // Note: ChildNode.remove doesn't throw if the parentNode is undefined.
+      this.styleElement.remove();
+      this.styleElement = null;
     }
     if (typeof PDFJSDev === 'undefined' || !PDFJSDev.test('MOZCENTRAL')) {
       this.nativeFontFaces.forEach(function(nativeFontFace) {
@@ -71,7 +55,7 @@ FontLoader.prototype = {
       });
       this.nativeFontFaces.length = 0;
     }
-  }
+  },
 };
 
 if (typeof PDFJSDev === 'undefined' || !PDFJSDev.test('MOZCENTRAL')) {
@@ -103,10 +87,10 @@ if (typeof PDFJSDev === 'undefined' || !PDFJSDev.test('MOZCENTRAL')) {
       'ABAAAAAAAAAAAD6AAAAAAAAA==');
   };
   Object.defineProperty(FontLoader.prototype, 'loadTestFont', {
-    get: function () {
+    get() {
       return shadow(this, 'loadTestFont', getLoadTestFont());
     },
-    configurable: true
+    configurable: true,
   });
 
   FontLoader.prototype.addNativeFontFace =
@@ -186,8 +170,8 @@ if (typeof PDFJSDev === 'undefined' || !PDFJSDev.test('MOZCENTRAL')) {
     var request = {
       id: requestId,
       complete: LoadLoader_completeRequest,
-      callback: callback,
-      started: Date.now()
+      callback,
+      started: Date.now(),
     };
     context.requests.push(request);
     return request;
@@ -217,6 +201,7 @@ if (typeof PDFJSDev === 'undefined' || !PDFJSDev.test('MOZCENTRAL')) {
 
       var i, ii;
 
+      // The temporary canvas is used to determine if fonts are loaded.
       var canvas = document.createElement('canvas');
       canvas.width = 1;
       canvas.height = 1;
@@ -335,19 +320,19 @@ if (typeof PDFJSDev === 'undefined' || !PDFJSDev.test('MOZCENTRAL || CHROME')) {
     return supported;
   };
   Object.defineProperty(FontLoader, 'isSyncFontLoadingSupported', {
-    get: function () {
+    get() {
       return shadow(FontLoader, 'isSyncFontLoadingSupported',
                     isSyncFontLoadingSupported());
     },
     enumerable: true,
-    configurable: true
+    configurable: true,
   });
 }
 
 var IsEvalSupportedCached = {
   get value() {
-    return shadow(this, 'value', sharedUtil.isEvalSupported());
-  }
+    return shadow(this, 'value', isEvalSupported());
+  },
 };
 
 var FontFaceObject = (function FontFaceObjectClosure() {
@@ -361,25 +346,25 @@ var FontFaceObject = (function FontFaceObjectClosure() {
   }
   FontFaceObject.prototype = {
     createNativeFontFace: function FontFaceObject_createNativeFontFace() {
-      if (typeof PDFJSDev === 'undefined' || !PDFJSDev.test('MOZCENTRAL')) {
-        if (!this.data) {
-          return null;
-        }
-
-        if (this.options.disableFontFace) {
-          this.disableFontFace = true;
-          return null;
-        }
-
-        var nativeFontFace = new FontFace(this.loadedName, this.data, {});
-
-        if (this.options.fontRegistry) {
-          this.options.fontRegistry.registerFont(this);
-        }
-        return nativeFontFace;
-      } else {
+      if (typeof PDFJSDev !== 'undefined' && PDFJSDev.test('MOZCENTRAL')) {
         throw new Error('Not implemented: createNativeFontFace');
       }
+
+      if (!this.data) {
+        return null;
+      }
+
+      if (this.options.disableFontFace) {
+        this.disableFontFace = true;
+        return null;
+      }
+
+      var nativeFontFace = new FontFace(this.loadedName, this.data, {});
+
+      if (this.options.fontRegistry) {
+        this.options.fontRegistry.registerFont(this);
+      }
+      return nativeFontFace;
     },
 
     createFontFaceRule: function FontFaceObject_createFontFaceRule() {
@@ -426,7 +411,7 @@ var FontFaceObject = (function FontFaceObjectClosure() {
 
             js += 'c.' + current.cmd + '(' + args + ');\n';
           }
-          /* jshint -W054 */
+          // eslint-disable-next-line no-new-func
           this.compiledGlyphs[character] = new Function('c', 'size', js);
         } else {
           // But fall back on using Function.prototype.apply() if we're
@@ -445,12 +430,13 @@ var FontFaceObject = (function FontFaceObjectClosure() {
         }
       }
       return this.compiledGlyphs[character];
-    }
+    },
   };
 
   return FontFaceObject;
 })();
 
-exports.FontFaceObject = FontFaceObject;
-exports.FontLoader = FontLoader;
-}));
+export {
+  FontFaceObject,
+  FontLoader,
+};

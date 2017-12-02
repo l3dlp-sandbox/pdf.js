@@ -3,6 +3,7 @@
   "defaultZoomValue": "",
   "sidebarViewOnLoad": 0,
   "enableHandToolOnLoad": false,
+  "cursorToolOnLoad": 0,
   "enableWebGL": false,
   "pdfBugEnabled": false,
   "disableRange": false,
@@ -15,5 +16,7 @@
   "enhanceTextSelection": false,
   "renderer": "canvas",
   "renderInteractiveForms": false,
+  "enablePrintAutoRotate": false,
+  "disablePageMode": false,
   "disablePageLabels": false
 }

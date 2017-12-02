@@ -1,8 +1,23 @@
-/* globals describe, it, expect, beforeAll, afterAll, beforeEach, afterEach,
-           Stream, CFFParser, SEAC_ANALYSIS_ENABLED, CFFIndex, CFFStrings,
-           CFFCompiler */
+/* Copyright 2017 Mozilla Foundation
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
 
-'use strict';
+import {
+  CFFCompiler, CFFParser, CFFStrings
+} from '../../src/core/cff_parser';
+import { SEAC_ANALYSIS_ENABLED } from '../../src/core/fonts';
+import { Stream } from '../../src/core/stream';
 
 describe('CFFParser', function() {
   function createWithNullProto(obj) {
@@ -12,6 +27,13 @@ describe('CFFParser', function() {
     }
     return result;
   }
+
+  // Stub that returns `0` for any privateDict key.
+  var privateDictStub = {
+    getByName(name) {
+      return 0;
+    },
+  };
 
   var fontData, parser, cff;
 
@@ -64,23 +86,6 @@ describe('CFFParser', function() {
     var names = cff.names;
     expect(names.length).toEqual(1);
     expect(names[0]).toEqual('ABCDEF+Times-Roman');
-  });
-
-  it('sanitizes name index', function() {
-    var index = new CFFIndex();
-    index.add(['['.charCodeAt(0), 'a'.charCodeAt(0)]);
-
-    var names = parser.parseNameIndex(index);
-    expect(names).toEqual(['_a']);
-
-    index = new CFFIndex();
-    var longName = [];
-    for (var i = 0; i < 129; i++) {
-      longName.push(0);
-    }
-    index.add(longName);
-    names = parser.parseNameIndex(index);
-    expect(names[0].length).toEqual(127);
   });
 
   it('parses string index', function() {
@@ -148,7 +153,10 @@ describe('CFFParser', function() {
                               ]);
     parser.bytes = bytes;
     var charStringsIndex = parser.parseIndex(0).obj;
-    var charStrings = parser.parseCharStrings(charStringsIndex).charStrings;
+    var charStrings = parser.parseCharStrings({
+      charStrings: charStringsIndex,
+      privateDict: privateDictStub,
+    }).charStrings;
     expect(charStrings.count).toEqual(1);
     // shoudn't be sanitized
     expect(charStrings.get(0).length).toEqual(38);
@@ -157,7 +165,7 @@ describe('CFFParser', function() {
   it('parses a CharString endchar with 4 args w/seac enabled', function() {
     var parser = new CFFParser(fontData, {},
                                /* seacAnalysisEnabled = */ true);
-    var cff = parser.parse();
+    parser.parse(); // cff
 
     var bytes = new Uint8Array([0, 1, // count
                                 1,  // offsetSize
@@ -165,7 +173,10 @@ describe('CFFParser', function() {
                                 237, 247, 22, 247, 72, 204, 247, 86, 14]);
     parser.bytes = bytes;
     var charStringsIndex = parser.parseIndex(0).obj;
-    var result = parser.parseCharStrings(charStringsIndex);
+    var result = parser.parseCharStrings({
+      charStrings: charStringsIndex,
+      privateDict: privateDictStub,
+    });
     expect(result.charStrings.count).toEqual(1);
     expect(result.charStrings.get(0).length).toEqual(1);
     expect(result.seacs.length).toEqual(1);
@@ -179,7 +190,7 @@ describe('CFFParser', function() {
   it('parses a CharString endchar with 4 args w/seac disabled', function() {
     var parser = new CFFParser(fontData, {},
                                /* seacAnalysisEnabled = */ false);
-    var cff = parser.parse();
+    parser.parse(); // cff
 
     var bytes = new Uint8Array([0, 1, // count
                                 1,  // offsetSize
@@ -187,7 +198,10 @@ describe('CFFParser', function() {
                                 237, 247, 22, 247, 72, 204, 247, 86, 14]);
     parser.bytes = bytes;
     var charStringsIndex = parser.parseIndex(0).obj;
-    var result = parser.parseCharStrings(charStringsIndex);
+    var result = parser.parseCharStrings({
+      charStrings: charStringsIndex,
+      privateDict: privateDictStub,
+    });
     expect(result.charStrings.count).toEqual(1);
     expect(result.charStrings.get(0).length).toEqual(9);
     expect(result.seacs.length).toEqual(0);
@@ -200,7 +214,10 @@ describe('CFFParser', function() {
                                 14]);
     parser.bytes = bytes;
     var charStringsIndex = parser.parseIndex(0).obj;
-    var result = parser.parseCharStrings(charStringsIndex);
+    var result = parser.parseCharStrings({
+      charStrings: charStringsIndex,
+      privateDict: privateDictStub,
+    });
     expect(result.charStrings.count).toEqual(1);
     expect(result.charStrings.get(0)[0]).toEqual(14);
     expect(result.seacs.length).toEqual(0);
@@ -268,7 +285,7 @@ describe('CFFParser', function() {
                               ]);
     parser.bytes = bytes;
     var encoding = parser.parseEncoding(2, {}, new CFFStrings(), null);
-    expect(encoding.encoding).toEqual(createWithNullProto({0x8: 1}));
+    expect(encoding.encoding).toEqual(createWithNullProto({ 0x8: 1, }));
   });
 
   it('parses encoding format 1', function() {
@@ -282,7 +299,7 @@ describe('CFFParser', function() {
     parser.bytes = bytes;
     var encoding = parser.parseEncoding(2, {}, new CFFStrings(), null);
     expect(encoding.encoding).toEqual(
-      createWithNullProto({0x7: 0x01, 0x08: 0x02}));
+      createWithNullProto({ 0x7: 0x01, 0x08: 0x02, }));
   });
 
   it('parses fdselect format 0', function() {
@@ -334,6 +351,16 @@ describe('CFFParser', function() {
 });
 
 describe('CFFCompiler', function() {
+
+  function testParser(bytes) {
+    bytes = new Uint8Array(bytes);
+    return new CFFParser({
+      getBytes: () => {
+        return bytes;
+      },
+    }, {}, SEAC_ANALYSIS_ENABLED);
+  }
+
   it('encodes integers', function() {
     var c = new CFFCompiler();
     // all the examples from the spec
@@ -352,6 +379,25 @@ describe('CFFCompiler', function() {
     var c = new CFFCompiler();
     expect(c.encodeFloat(-2.25)).toEqual([0x1e, 0xe2, 0xa2, 0x5f]);
     expect(c.encodeFloat(5e-11)).toEqual([0x1e, 0x5c, 0x11, 0xff]);
+  });
+
+  it('sanitizes name index', function() {
+    var c = new CFFCompiler();
+    var nameIndexCompiled = c.compileNameIndex(['[a']);
+    var parser = testParser(nameIndexCompiled);
+    var nameIndex = parser.parseIndex(0);
+    var names = parser.parseNameIndex(nameIndex.obj);
+    expect(names).toEqual(['_a']);
+
+    var longName = '';
+    for (var i = 0; i < 129; i++) {
+      longName += '_';
+    }
+    nameIndexCompiled = c.compileNameIndex([longName]);
+    parser = testParser(nameIndexCompiled);
+    nameIndex = parser.parseIndex(0);
+    names = parser.parseNameIndex(nameIndex.obj);
+    expect(names[0].length).toEqual(127);
   });
 
   // TODO a lot more compiler tests
