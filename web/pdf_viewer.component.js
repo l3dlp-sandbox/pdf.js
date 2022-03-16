@@ -14,42 +14,58 @@
  */
 
 import {
-  AnnotationLayerBuilder, DefaultAnnotationLayerFactory
-} from './annotation_layer_builder.js';
+  DefaultAnnotationLayerFactory,
+  DefaultStructTreeLayerFactory,
+  DefaultTextLayerFactory,
+  DefaultXfaLayerFactory,
+} from "./default_factory.js";
 import {
-  DefaultTextLayerFactory, TextLayerBuilder
-} from './text_layer_builder.js';
-import { EventBus, NullL10n, ProgressBar } from './ui_utils.js';
-import { PDFLinkService, SimpleLinkService } from './pdf_link_service.js';
-import { DownloadManager } from './download_manager.js';
-import { GenericL10n } from './genericl10n.js';
-import { PDFFindController } from './pdf_find_controller.js';
-import { PDFHistory } from './pdf_history.js';
-import pdfjsLib from './pdfjs.js';
-import { PDFPageView } from './pdf_page_view.js';
-import { PDFSinglePageViewer } from './pdf_single_page_viewer';
-import { PDFViewer } from './pdf_viewer.js';
+  LinkTarget,
+  PDFLinkService,
+  SimpleLinkService,
+} from "./pdf_link_service.js";
+import { parseQueryString, ProgressBar } from "./ui_utils.js";
+import { PDFSinglePageViewer, PDFViewer } from "./pdf_viewer.js";
+import { AnnotationLayerBuilder } from "./annotation_layer_builder.js";
+import { DownloadManager } from "./download_manager.js";
+import { EventBus } from "./event_utils.js";
+import { GenericL10n } from "./genericl10n.js";
+import { NullL10n } from "./l10n_utils.js";
+import { PDFFindController } from "./pdf_find_controller.js";
+import { PDFHistory } from "./pdf_history.js";
+import { PDFPageView } from "./pdf_page_view.js";
+import { PDFScriptingManager } from "./pdf_scripting_manager.js";
+import { StructTreeLayerBuilder } from "./struct_tree_layer_builder.js";
+import { TextLayerBuilder } from "./text_layer_builder.js";
+import { XfaLayerBuilder } from "./xfa_layer_builder.js";
 
-let { PDFJS, } = pdfjsLib;
-
-PDFJS.PDFViewer = PDFViewer;
-PDFJS.PDFSinglePageViewer = PDFSinglePageViewer;
-PDFJS.PDFPageView = PDFPageView;
-PDFJS.PDFLinkService = PDFLinkService;
-PDFJS.SimpleLinkService = SimpleLinkService;
-PDFJS.TextLayerBuilder = TextLayerBuilder;
-PDFJS.DefaultTextLayerFactory = DefaultTextLayerFactory;
-PDFJS.AnnotationLayerBuilder = AnnotationLayerBuilder;
-PDFJS.DefaultAnnotationLayerFactory = DefaultAnnotationLayerFactory;
-PDFJS.PDFHistory = PDFHistory;
-PDFJS.PDFFindController = PDFFindController;
-PDFJS.EventBus = EventBus;
-
-PDFJS.DownloadManager = DownloadManager;
-PDFJS.ProgressBar = ProgressBar;
-PDFJS.GenericL10n = GenericL10n;
-PDFJS.NullL10n = NullL10n;
+// eslint-disable-next-line no-unused-vars
+const pdfjsVersion = PDFJSDev.eval("BUNDLE_VERSION");
+// eslint-disable-next-line no-unused-vars
+const pdfjsBuild = PDFJSDev.eval("BUNDLE_BUILD");
 
 export {
-  PDFJS,
+  AnnotationLayerBuilder,
+  DefaultAnnotationLayerFactory,
+  DefaultStructTreeLayerFactory,
+  DefaultTextLayerFactory,
+  DefaultXfaLayerFactory,
+  DownloadManager,
+  EventBus,
+  GenericL10n,
+  LinkTarget,
+  NullL10n,
+  parseQueryString,
+  PDFFindController,
+  PDFHistory,
+  PDFLinkService,
+  PDFPageView,
+  PDFScriptingManager,
+  PDFSinglePageViewer,
+  PDFViewer,
+  ProgressBar,
+  SimpleLinkService,
+  StructTreeLayerBuilder,
+  TextLayerBuilder,
+  XfaLayerBuilder,
 };
