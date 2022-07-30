@@ -15,9 +15,9 @@
 
 import { Dict, Ref } from "./primitives.js";
 import {
+  FeatureTest,
   FormatError,
   info,
-  IsEvalSupportedCached,
   shadow,
   unreachable,
 } from "../shared/util.js";
@@ -438,7 +438,7 @@ class PDFFunction {
     const parser = new PostScriptParser(lexer);
     const code = parser.parse();
 
-    if (isEvalSupported && IsEvalSupportedCached.value) {
+    if (isEvalSupported && FeatureTest.isEvalSupported) {
       const compiled = new PostScriptCompiler().compile(code, domain, range);
       if (compiled) {
         // Compiled function consists of simple expressions such as addition,
@@ -1166,7 +1166,7 @@ const PostScriptCompiler = (function PostScriptCompilerClosure() {
               i += 6;
               break;
             }
-            ast1 = stack[stack.length - 1];
+            ast1 = stack.at(-1);
             if (ast1.type === "literal" || ast1.type === "var") {
               // we don't have to save into intermediate variable a literal or
               // variable.

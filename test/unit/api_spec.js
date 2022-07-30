@@ -48,6 +48,7 @@ import {
   RenderingCancelledException,
   StatTimer,
 } from "../../src/display/display_utils.js";
+import { AnnotationStorage } from "../../src/display/annotation_storage.js";
 import { AutoPrintRegExp } from "../../web/ui_utils.js";
 import { GlobalImageCache } from "../../src/core/image_utils.js";
 import { GlobalWorkerOptions } from "../../src/display/worker_options.js";
@@ -77,7 +78,9 @@ describe("api", function () {
   }
 
   function mergeText(items) {
-    return items.map(chunk => chunk.str + (chunk.hasEOL ? "\n" : "")).join("");
+    return items
+      .map(chunk => (chunk.str ?? "") + (chunk.hasEOL ? "\n" : ""))
+      .join("");
   }
 
   describe("getDocument", function () {
@@ -670,6 +673,38 @@ describe("api", function () {
 
       await Promise.all([loadingTask1.destroy(), loadingTask2.destroy()]);
     });
+
+    it("creates pdf doc from PDF file with bad /Resources entry", async function () {
+      const loadingTask = getDocument(buildGetDocumentParams("issue15150.pdf"));
+      expect(loadingTask instanceof PDFDocumentLoadingTask).toEqual(true);
+
+      const pdfDocument = await loadingTask.promise;
+      expect(pdfDocument.numPages).toEqual(1);
+
+      const page = await pdfDocument.getPage(1);
+      expect(page instanceof PDFPageProxy).toEqual(true);
+
+      const opList = await page.getOperatorList();
+      expect(opList.fnArray).toEqual([
+        OPS.setLineWidth,
+        OPS.setStrokeRGBColor,
+        OPS.constructPath,
+        OPS.closeStroke,
+      ]);
+      expect(opList.argsArray).toEqual([
+        [0.5],
+        new Uint8ClampedArray([255, 0, 0]),
+        [
+          [OPS.moveTo, OPS.lineTo],
+          [0, 9.75, 0.5, 9.75],
+          [0, 0.5, 9.75, 9.75],
+        ],
+        null,
+      ]);
+      expect(opList.lastChunk).toEqual(true);
+
+      await loadingTask.destroy();
+    });
   });
 
   describe("PDFWorker", function () {
@@ -1004,6 +1039,21 @@ describe("api", function () {
       await loadingTask.destroy();
     });
 
+    it("gets a destination, from /Names (NameTree) dictionary with keys using PDFDocEncoding (issue 14847)", async function () {
+      const loadingTask = getDocument(buildGetDocumentParams("issue14847.pdf"));
+      const pdfDoc = await loadingTask.promise;
+      const destination = await pdfDoc.getDestination("index");
+      expect(destination).toEqual([
+        { num: 10, gen: 0 },
+        { name: "XYZ" },
+        85.039,
+        728.504,
+        null,
+      ]);
+
+      await loadingTask.destroy();
+    });
+
     it("gets non-string destination", async function () {
       let numberPromise = pdfDocument.getDestination(4.3);
       let booleanPromise = pdfDocument.getDestination(true);
@@ -1305,7 +1355,7 @@ describe("api", function () {
           {
             id: "25R",
             value: "",
-            defaultValue: null,
+            defaultValue: "",
             multiline: false,
             password: false,
             charLimit: null,
@@ -1318,6 +1368,7 @@ describe("api", function () {
             page: 0,
             strokeColor: null,
             fillColor: null,
+            rotation: 0,
             type: "text",
           },
         ],
@@ -1339,6 +1390,7 @@ describe("api", function () {
             page: 0,
             strokeColor: null,
             fillColor: new Uint8ClampedArray([192, 192, 192]),
+            rotation: 0,
             type: "button",
           },
         ],
@@ -1435,6 +1487,33 @@ describe("api", function () {
       expect(outlineItemOne.bold).toEqual(false);
       expect(outlineItemOne.italic).toEqual(true);
       expect(outlineItemOne.color).toEqual(new Uint8ClampedArray([0, 0, 0]));
+
+      await loadingTask.destroy();
+    });
+
+    it("gets outline, with dest-strings using PDFDocEncoding (issue 14864)", async function () {
+      if (isNodeJS) {
+        pending("Linked test-cases are not supported in Node.js.");
+      }
+      const loadingTask = getDocument(buildGetDocumentParams("issue14864.pdf"));
+      const pdfDoc = await loadingTask.promise;
+      const outline = await pdfDoc.getOutline();
+
+      expect(Array.isArray(outline)).toEqual(true);
+      expect(outline.length).toEqual(6);
+
+      expect(outline[4]).toEqual({
+        dest: "Händel -- Halle🎆lujah",
+        url: null,
+        unsafeUrl: undefined,
+        newWindow: undefined,
+        title: "Händel -- Halle🎆lujah",
+        color: new Uint8ClampedArray([0, 0, 0]),
+        count: undefined,
+        bold: false,
+        italic: false,
+        items: [],
+      });
 
       await loadingTask.destroy();
     });
@@ -1666,7 +1745,7 @@ describe("api", function () {
 
       expect(fingerprints1).not.toEqual(fingerprints2);
 
-      expect(fingerprints1).toEqual(["2f695a83d6e7553c24fc08b7ac69712d", null]);
+      expect(fingerprints1).toEqual(["657428c0628e329f9a281fb6d2d092d4", null]);
       expect(fingerprints2).toEqual(["04c7126b34a46b6d4d6e7a1eff7edcb6", null]);
 
       await Promise.all([loadingTask1.destroy(), loadingTask2.destroy()]);
@@ -2230,6 +2309,28 @@ Caron Broadcasting, Inc., an Ohio corporation (“Lessee”).`)
       await loadingTask.destroy();
     });
 
+    it("gets text content with or without includeMarkedContent, and compare (issue 15094)", async function () {
+      if (isNodeJS) {
+        pending("Linked test-cases are not supported in Node.js.");
+      }
+
+      const loadingTask = getDocument(buildGetDocumentParams("pdf.pdf"));
+      const pdfDoc = await loadingTask.promise;
+      const pdfPage = await pdfDoc.getPage(568);
+      let { items } = await pdfPage.getTextContent({
+        includeMarkedContent: false,
+      });
+      const textWithoutMC = mergeText(items);
+      ({ items } = await pdfPage.getTextContent({
+        includeMarkedContent: true,
+      }));
+      const textWithMC = mergeText(items);
+
+      expect(textWithoutMC).toEqual(textWithMC);
+
+      await loadingTask.destroy();
+    });
+
     it("gets empty structure tree", async function () {
       const tree = await page.getStructTree();
 
@@ -2401,16 +2502,28 @@ Caron Broadcasting, Inc., an Ohio corporation (“Lessee”).`)
       const opListAnnotEnable = await pdfPage.getOperatorList({
         annotationMode: AnnotationMode.ENABLE,
       });
-      expect(opListAnnotEnable.fnArray.length).toBeGreaterThan(150);
-      expect(opListAnnotEnable.argsArray.length).toBeGreaterThan(150);
+      expect(opListAnnotEnable.fnArray.length).toBeGreaterThan(140);
+      expect(opListAnnotEnable.argsArray.length).toBeGreaterThan(140);
       expect(opListAnnotEnable.lastChunk).toEqual(true);
+
+      let firstAnnotIndex = opListAnnotEnable.fnArray.indexOf(
+        OPS.beginAnnotation
+      );
+      let isUsingOwnCanvas = opListAnnotEnable.argsArray[firstAnnotIndex][4];
+      expect(isUsingOwnCanvas).toEqual(false);
 
       const opListAnnotEnableForms = await pdfPage.getOperatorList({
         annotationMode: AnnotationMode.ENABLE_FORMS,
       });
-      expect(opListAnnotEnableForms.fnArray.length).toBeGreaterThan(40);
-      expect(opListAnnotEnableForms.argsArray.length).toBeGreaterThan(40);
+      expect(opListAnnotEnableForms.fnArray.length).toBeGreaterThan(30);
+      expect(opListAnnotEnableForms.argsArray.length).toBeGreaterThan(30);
       expect(opListAnnotEnableForms.lastChunk).toEqual(true);
+
+      firstAnnotIndex = opListAnnotEnableForms.fnArray.indexOf(
+        OPS.beginAnnotation
+      );
+      isUsingOwnCanvas = opListAnnotEnableForms.argsArray[firstAnnotIndex][4];
+      expect(isUsingOwnCanvas).toEqual(true);
 
       const opListAnnotEnableStorage = await pdfPage.getOperatorList({
         annotationMode: AnnotationMode.ENABLE_STORAGE,
@@ -2418,6 +2531,12 @@ Caron Broadcasting, Inc., an Ohio corporation (“Lessee”).`)
       expect(opListAnnotEnableStorage.fnArray.length).toBeGreaterThan(170);
       expect(opListAnnotEnableStorage.argsArray.length).toBeGreaterThan(170);
       expect(opListAnnotEnableStorage.lastChunk).toEqual(true);
+
+      firstAnnotIndex = opListAnnotEnableStorage.fnArray.indexOf(
+        OPS.beginAnnotation
+      );
+      isUsingOwnCanvas = opListAnnotEnableStorage.argsArray[firstAnnotIndex][4];
+      expect(isUsingOwnCanvas).toEqual(false);
 
       // Sanity check to ensure that the `annotationMode` is correctly applied.
       expect(opListAnnotDisable.fnArray.length).toBeLessThan(
@@ -2781,6 +2900,75 @@ Caron Broadcasting, Inc., an Ohio corporation (“Lessee”).`)
 
       await loadingTask.destroy();
       firstImgData = null;
+    });
+
+    it("render for printing, with `printAnnotationStorage` set", async function () {
+      async function getPrintData(printAnnotationStorage = null) {
+        const canvasAndCtx = CanvasFactory.create(
+          viewport.width,
+          viewport.height
+        );
+        const renderTask = pdfPage.render({
+          canvasContext: canvasAndCtx.context,
+          canvasFactory: CanvasFactory,
+          viewport,
+          intent: "print",
+          annotationMode: AnnotationMode.ENABLE_STORAGE,
+          printAnnotationStorage,
+        });
+
+        await renderTask.promise;
+        const printData = canvasAndCtx.canvas.toDataURL();
+        CanvasFactory.destroy(canvasAndCtx);
+
+        return printData;
+      }
+
+      const loadingTask = getDocument(
+        buildGetDocumentParams("annotation-tx.pdf")
+      );
+      const pdfDoc = await loadingTask.promise;
+      const pdfPage = await pdfDoc.getPage(1);
+      const viewport = pdfPage.getViewport({ scale: 1 });
+
+      // Update the contents of the form-field.
+      const { annotationStorage } = pdfDoc;
+      annotationStorage.setValue("22R", { value: "Hello World" });
+
+      // Render for printing, with default parameters.
+      const printOriginalData = await getPrintData();
+
+      // Get the *frozen* print-storage for use during printing.
+      const printAnnotationStorage = annotationStorage.print;
+      // Update the contents of the form-field again.
+      annotationStorage.setValue("22R", { value: "Printing again..." });
+
+      const annotationHash = AnnotationStorage.getHash(
+        annotationStorage.serializable
+      );
+      const printAnnotationHash = AnnotationStorage.getHash(
+        printAnnotationStorage.serializable
+      );
+      // Sanity check to ensure that the print-storage didn't change,
+      // after the form-field was updated.
+      expect(printAnnotationHash).not.toEqual(annotationHash);
+
+      // Render for printing again, after updating the form-field,
+      // with default parameters.
+      const printAgainData = await getPrintData();
+
+      // Render for printing again, after updating the form-field,
+      // with `printAnnotationStorage` set.
+      const printStorageData = await getPrintData(printAnnotationStorage);
+
+      // Ensure that printing again, with default parameters,
+      // actually uses the "new" form-field data.
+      expect(printAgainData).not.toEqual(printOriginalData);
+      // Finally ensure that printing, with `printAnnotationStorage` set,
+      // still uses the "previous" form-field data.
+      expect(printStorageData).toEqual(printOriginalData);
+
+      await loadingTask.destroy();
     });
   });
 

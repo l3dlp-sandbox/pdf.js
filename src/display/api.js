@@ -38,6 +38,10 @@ import {
   warn,
 } from "../shared/util.js";
 import {
+  AnnotationStorage,
+  PrintAnnotationStorage,
+} from "./annotation_storage.js";
+import {
   deprecated,
   DOMCanvasFactory,
   DOMCMapReaderFactory,
@@ -49,12 +53,6 @@ import {
   StatTimer,
 } from "./display_utils.js";
 import { FontFaceObject, FontLoader } from "./font_loader.js";
-import {
-  NodeCanvasFactory,
-  NodeCMapReaderFactory,
-  NodeStandardFontDataFactory,
-} from "./node_utils.js";
-import { AnnotationStorage } from "./annotation_storage.js";
 import { CanvasGraphics } from "./canvas.js";
 import { GlobalWorkerOptions } from "./worker_options.js";
 import { isNodeJS } from "../shared/is_node.js";
@@ -67,18 +65,21 @@ import { XfaText } from "./xfa_text.js";
 const DEFAULT_RANGE_CHUNK_SIZE = 65536; // 2^16 = 65536
 const RENDERING_CANCELLED_TIMEOUT = 100; // ms
 
-const DefaultCanvasFactory =
-  (typeof PDFJSDev === "undefined" || PDFJSDev.test("GENERIC")) && isNodeJS
-    ? NodeCanvasFactory
-    : DOMCanvasFactory;
-const DefaultCMapReaderFactory =
-  (typeof PDFJSDev === "undefined" || PDFJSDev.test("GENERIC")) && isNodeJS
-    ? NodeCMapReaderFactory
-    : DOMCMapReaderFactory;
-const DefaultStandardFontDataFactory =
-  (typeof PDFJSDev === "undefined" || PDFJSDev.test("GENERIC")) && isNodeJS
-    ? NodeStandardFontDataFactory
-    : DOMStandardFontDataFactory;
+let DefaultCanvasFactory = DOMCanvasFactory;
+let DefaultCMapReaderFactory = DOMCMapReaderFactory;
+let DefaultStandardFontDataFactory = DOMStandardFontDataFactory;
+
+if (typeof PDFJSDev !== "undefined" && PDFJSDev.test("GENERIC") && isNodeJS) {
+  const {
+    NodeCanvasFactory,
+    NodeCMapReaderFactory,
+    NodeStandardFontDataFactory,
+  } = require("./node_utils.js");
+
+  DefaultCanvasFactory = NodeCanvasFactory;
+  DefaultCMapReaderFactory = NodeCMapReaderFactory;
+  DefaultStandardFontDataFactory = NodeStandardFontDataFactory;
+}
 
 /**
  * @typedef {function} IPDFStreamFactory
@@ -355,15 +356,10 @@ function getDocument(src) {
     params.isEvalSupported = true;
   }
   if (typeof params.disableFontFace !== "boolean") {
-    params.disableFontFace =
-      (typeof PDFJSDev === "undefined" || PDFJSDev.test("GENERIC")) && isNodeJS;
+    params.disableFontFace = isNodeJS;
   }
   if (typeof params.useSystemFonts !== "boolean") {
-    params.useSystemFonts =
-      !(
-        (typeof PDFJSDev === "undefined" || PDFJSDev.test("GENERIC")) &&
-        isNodeJS
-      ) && !params.disableFontFace;
+    params.useSystemFonts = !isNodeJS && !params.disableFontFace;
   }
   if (
     typeof params.ownerDocument !== "object" ||
@@ -519,6 +515,12 @@ async function _fetchDocument(worker, source, pdfDataRangeTransport, docId) {
         : null,
     }
   );
+
+  // Release the TypedArray data, when it exists, since it's no longer needed
+  // on the main-thread *after* it's been sent to the worker-thread.
+  if (source.data) {
+    source.data = null;
+  }
 
   if (worker.destroyed) {
     throw new Error("Worker was destroyed");
@@ -960,8 +962,8 @@ class PDFDocumentProxy {
   }
 
   /**
-   * @returns {Promise<TypedArray>} A promise that is resolved with a
-   *   {TypedArray} that has the raw data from the PDF.
+   * @returns {Promise<Uint8Array>} A promise that is resolved with a
+   *   {Uint8Array} that has the raw data from the PDF.
    */
   getData() {
     return this._transport.getData();
@@ -1169,6 +1171,12 @@ class PDFDocumentProxy {
  *   <color> value, a `CanvasGradient` object (a linear or radial gradient) or
  *   a `CanvasPattern` object (a repetitive image). The default value is
  *   'rgb(255,255,255)'.
+ *
+ *   NOTE: This option may be partially, or completely, ignored when the
+ *   `pageColors`-option is used.
+ * @property {Object} [pageColors] - Overwrites background and foreground colors
+ *   with user defined ones in order to improve readability in high contrast
+ *   mode.
  * @property {Promise<OptionalContentConfig>} [optionalContentConfigPromise] -
  *   A promise that should resolve with an {@link OptionalContentConfig}
  *   created from `PDFDocumentProxy.getOptionalContentConfig`. If `null`,
@@ -1176,6 +1184,7 @@ class PDFDocumentProxy {
  *   states set.
  * @property {Map<string, HTMLCanvasElement>} [annotationCanvasMap] - Map some
  *   annotation ids with canvases used to render them.
+ * @property {PrintAnnotationStorage} [printAnnotationStorage]
  */
 
 /**
@@ -1196,6 +1205,7 @@ class PDFDocumentProxy {
  *      (as above) but where interactive form elements are updated with data
  *      from the {@link AnnotationStorage}-instance; useful e.g. for printing.
  *   The default value is `AnnotationMode.ENABLE`.
+ * @property {PrintAnnotationStorage} [printAnnotationStorage]
  */
 
 /**
@@ -1240,6 +1250,8 @@ class PDFPageProxy {
     /** @type {PDFObjects} */
     this.commonObjs = transport.commonObjs;
     this.objs = new PDFObjects();
+
+    this._bitmaps = new Set();
 
     this.cleanupAfterRender = false;
     this.pendingCleanup = false;
@@ -1391,6 +1403,8 @@ class PDFPageProxy {
     background = null,
     optionalContentConfigPromise = null,
     annotationCanvasMap = null,
+    pageColors = null,
+    printAnnotationStorage = null,
   }) {
     if (typeof PDFJSDev !== "undefined" && PDFJSDev.test("GENERIC")) {
       if (arguments[0]?.renderInteractiveForms !== undefined) {
@@ -1425,7 +1439,8 @@ class PDFPageProxy {
 
     const intentArgs = this._transport.getRenderingIntent(
       intent,
-      annotationMode
+      annotationMode,
+      printAnnotationStorage
     );
     // If there was a pending destroy, cancel it so no cleanup happens during
     // this call to render.
@@ -1514,6 +1529,7 @@ class PDFPageProxy {
       canvasFactory: canvasFactoryInstance,
       useRequestAnimationFrame: !intentPrint,
       pdfBug: this._pdfBug,
+      pageColors,
     });
 
     (intentState.renderTasks ||= new Set()).add(internalRenderTask);
@@ -1551,6 +1567,7 @@ class PDFPageProxy {
   getOperatorList({
     intent = "display",
     annotationMode = AnnotationMode.ENABLE,
+    printAnnotationStorage = null,
   } = {}) {
     function operatorListChanged() {
       if (intentState.operatorList.lastChunk) {
@@ -1563,6 +1580,7 @@ class PDFPageProxy {
     const intentArgs = this._transport.getRenderingIntent(
       intent,
       annotationMode,
+      printAnnotationStorage,
       /* isOpList = */ true
     );
     let intentState = this._intentStates.get(intentArgs.cacheKey);
@@ -1696,6 +1714,10 @@ class PDFPageProxy {
       }
     }
     this.objs.clear();
+    for (const bitmap of this._bitmaps) {
+      bitmap.close();
+    }
+    this._bitmaps.clear();
     this._annotationPromises.clear();
     this._jsActionsPromise = null;
     this._structTreePromise = null;
@@ -1737,6 +1759,10 @@ class PDFPageProxy {
     if (resetStats && this._stats) {
       this._stats = new StatTimer();
     }
+    for (const bitmap of this._bitmaps) {
+      bitmap.close();
+    }
+    this._bitmaps.clear();
     this.pendingCleanup = false;
     return true;
   }
@@ -1783,7 +1809,7 @@ class PDFPageProxy {
   /**
    * @private
    */
-  _pumpOperatorList({ renderingIntent, cacheKey }) {
+  _pumpOperatorList({ renderingIntent, cacheKey, annotationStorageMap }) {
     if (
       typeof PDFJSDev === "undefined" ||
       PDFJSDev.test("!PRODUCTION || TESTING")
@@ -1800,10 +1826,7 @@ class PDFPageProxy {
         pageIndex: this._pageIndex,
         intent: renderingIntent,
         cacheKey,
-        annotationStorage:
-          renderingIntent & RenderingIntentFlag.ANNOTATIONS_STORAGE
-            ? this._transport.annotationStorage.serializable
-            : null,
+        annotationStorage: annotationStorageMap,
       }
     );
     const reader = readableStream.getReader();
@@ -1925,12 +1948,7 @@ class LoopbackPort {
 
   postMessage(obj, transfers) {
     const event = {
-      data:
-        typeof PDFJSDev === "undefined" ||
-        PDFJSDev.test("SKIP_BABEL") ||
-        transfers
-          ? structuredClone(obj, transfers)
-          : structuredClone(obj),
+      data: structuredClone(obj, transfers),
     };
 
     this._deferred.then(() => {
@@ -2394,10 +2412,11 @@ class WorkerTransport {
   getRenderingIntent(
     intent,
     annotationMode = AnnotationMode.ENABLE,
+    printAnnotationStorage = null,
     isOpList = false
   ) {
     let renderingIntent = RenderingIntentFlag.DISPLAY; // Default value.
-    let lastModified = "";
+    let annotationMap = null;
 
     switch (intent) {
       case "any":
@@ -2424,7 +2443,13 @@ class WorkerTransport {
       case AnnotationMode.ENABLE_STORAGE:
         renderingIntent += RenderingIntentFlag.ANNOTATIONS_STORAGE;
 
-        lastModified = this.annotationStorage.lastModified;
+        const annotationStorage =
+          renderingIntent & RenderingIntentFlag.PRINT &&
+          printAnnotationStorage instanceof PrintAnnotationStorage
+            ? printAnnotationStorage
+            : this.annotationStorage;
+
+        annotationMap = annotationStorage.serializable;
         break;
       default:
         warn(`getRenderingIntent - invalid annotationMode: ${annotationMode}`);
@@ -2436,7 +2461,10 @@ class WorkerTransport {
 
     return {
       renderingIntent,
-      cacheKey: `${renderingIntent}_${lastModified}`,
+      cacheKey: `${renderingIntent}_${AnnotationStorage.getHash(
+        annotationMap
+      )}`,
+      annotationStorageMap: annotationMap,
     };
   }
 
@@ -2778,8 +2806,19 @@ class WorkerTransport {
 
           // Heuristic that will allow us not to store large data.
           const MAX_IMAGE_SIZE_TO_STORE = 8000000;
-          if (imageData?.data?.length > MAX_IMAGE_SIZE_TO_STORE) {
-            pageProxy.cleanupAfterRender = true;
+          if (imageData) {
+            let length;
+            if (imageData.bitmap) {
+              const { bitmap, width, height } = imageData;
+              length = width * height * 4;
+              pageProxy._bitmaps.add(bitmap);
+            } else {
+              length = imageData.data?.length || 0;
+            }
+
+            if (length > MAX_IMAGE_SIZE_TO_STORE) {
+              pageProxy.cleanupAfterRender = true;
+            }
           }
           break;
         case "Pattern":
@@ -3203,6 +3242,7 @@ class InternalRenderTask {
     canvasFactory,
     useRequestAnimationFrame = false,
     pdfBug = false,
+    pageColors = null,
   }) {
     this.callback = callback;
     this.params = params;
@@ -3214,6 +3254,7 @@ class InternalRenderTask {
     this._pageIndex = pageIndex;
     this.canvasFactory = canvasFactory;
     this._pdfBug = pdfBug;
+    this.pageColors = pageColors;
 
     this.running = false;
     this.graphicsReadyCallback = null;
@@ -3268,7 +3309,8 @@ class InternalRenderTask {
       this.canvasFactory,
       imageLayer,
       optionalContentConfig,
-      this.annotationCanvasMap
+      this.annotationCanvasMap,
+      this.pageColors
     );
     this.gfx.beginDrawing({
       transform,

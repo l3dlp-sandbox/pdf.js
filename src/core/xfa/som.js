@@ -68,7 +68,7 @@ function parseIndex(index) {
   return parseInt(index, 10) || 0;
 }
 
-// For now expressions containaing .[...] or .(...) are not
+// For now expressions containing .[...] or .(...) are not
 // evaluated so don't parse them.
 // TODO: implement that stuff and the remove the noExpr param.
 function parseExpression(expr, dotDotAllowed, noExpr = true) {
@@ -100,7 +100,7 @@ function parseExpression(expr, dotDotAllowed, noExpr = true) {
         warn("XFA - Invalid index in SOM expression");
         return null;
       }
-      parsed[parsed.length - 1].index = parseIndex(match[0]);
+      parsed.at(-1).index = parseIndex(match[0]);
       pos += match[0].length + 1;
       continue;
     }
@@ -136,7 +136,7 @@ function parseExpression(expr, dotDotAllowed, noExpr = true) {
           return null;
         }
         // TODO:
-        // Javascript expression: should be a boolean operation with a path
+        // JavaScript expression: should be a boolean operation with a path
         // so maybe we can have our own parser for that stuff or
         // maybe use the formcalc one.
         operator = operators.dotParen;
@@ -254,7 +254,7 @@ function searchNode(
     if (isFinite(index)) {
       root = nodes.filter(node => index < node.length).map(node => node[index]);
     } else {
-      root = nodes.reduce((acc, node) => acc.concat(node), []);
+      root = nodes.flat();
     }
   }
 

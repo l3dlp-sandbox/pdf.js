@@ -75,7 +75,7 @@ import { DecodeStream } from "./decode_stream.js";
 import { getGlyphsUnicode } from "./glyphlist.js";
 import { getLookupTableFactory } from "./core_utils.js";
 import { getMetrics } from "./metrics.js";
-import { MurmurHash3_64 } from "./murmurhash3.js";
+import { MurmurHash3_64 } from "../shared/murmurhash3.js";
 import { OperatorList } from "./operator_list.js";
 import { PDFImage } from "./image.js";
 
@@ -168,6 +168,16 @@ function normalizeBlendMode(value, parsingArray = false) {
   }
   warn(`Unsupported blend mode: ${value.name}`);
   return "source-over";
+}
+
+function incrementCachedImageMaskCount(data) {
+  if (
+    data.fn === OPS.paintImageMaskXObject &&
+    data.args[0] &&
+    data.args[0].count > 0
+  ) {
+    data.args[0].count++;
+  }
 }
 
 // Trying to minimize Date.now() usage and check every 100 time.
@@ -436,7 +446,7 @@ class PartialEvaluator {
     if (!data) {
       return null;
     }
-    // Cache the "raw" standard font data, to avoid fetching it repeateadly
+    // Cache the "raw" standard font data, to avoid fetching it repeatedly
     // (see e.g. issue 11399).
     this.standardFontDataCache.set(name, data);
 
@@ -540,7 +550,7 @@ class PartialEvaluator {
   }
 
   _sendImgData(objId, imgData, cacheGlobally = false) {
-    const transfers = imgData ? [imgData.data.buffer] : null;
+    const transfers = imgData ? [imgData.bitmap || imgData.data.buffer] : null;
 
     if (this.parsingType3Font || cacheGlobally) {
       return this.handler.send(
@@ -592,12 +602,8 @@ class PartialEvaluator {
         resources
       );
     }
-    if (optionalContent !== undefined) {
-      operatorList.addOp(OPS.beginMarkedContentProps, ["OC", optionalContent]);
-    }
 
     const imageMask = dict.get("IM", "ImageMask") || false;
-    const interpolate = dict.get("I", "Interpolate");
     let imgData, args;
     if (imageMask) {
       // This depends on a tmpCanvas being filled with the
@@ -605,12 +611,39 @@ class PartialEvaluator {
       // data can't be done here. Instead of creating a
       // complete PDFImage, only read the information needed
       // for later.
+      const interpolate = dict.get("I", "Interpolate");
       const bitStrideLength = (w + 7) >> 3;
-      const imgArray = image.getBytes(
-        bitStrideLength * h,
-        /* forceClamped = */ true
-      );
+      const imgArray = image.getBytes(bitStrideLength * h);
       const decode = dict.getArray("D", "Decode");
+
+      if (this.parsingType3Font) {
+        imgData = PDFImage.createRawMask({
+          imgArray,
+          width: w,
+          height: h,
+          imageIsFromDecodeStream: image instanceof DecodeStream,
+          inverseDecode: !!decode && decode[0] > 0,
+          interpolate,
+        });
+
+        imgData.cached = !!cacheKey;
+        args = [imgData];
+
+        operatorList.addImageOps(
+          OPS.paintImageMaskXObject,
+          args,
+          optionalContent
+        );
+
+        if (cacheKey) {
+          localImageCache.set(cacheKey, imageRef, {
+            fn: OPS.paintImageMaskXObject,
+            args,
+            optionalContent,
+          });
+        }
+        return;
+      }
 
       imgData = PDFImage.createMask({
         imgArray,
@@ -620,19 +653,51 @@ class PartialEvaluator {
         inverseDecode: !!decode && decode[0] > 0,
         interpolate,
       });
-      imgData.cached = !!cacheKey;
-      args = [imgData];
 
-      operatorList.addOp(OPS.paintImageMaskXObject, args);
+      if (imgData.isSingleOpaquePixel) {
+        // Handles special case of mainly LaTeX documents which use image
+        // masks to draw lines with the current fill style.
+        operatorList.addImageOps(
+          OPS.paintSolidColorImageMask,
+          [],
+          optionalContent
+        );
+
+        if (cacheKey) {
+          localImageCache.set(cacheKey, imageRef, {
+            fn: OPS.paintSolidColorImageMask,
+            args: [],
+            optionalContent,
+          });
+        }
+        return;
+      }
+
+      const objId = `mask_${this.idFactory.createObjId()}`;
+      operatorList.addDependency(objId);
+      this._sendImgData(objId, imgData);
+
+      args = [
+        {
+          data: objId,
+          width: imgData.width,
+          height: imgData.height,
+          interpolate: imgData.interpolate,
+          count: 1,
+        },
+      ];
+      operatorList.addImageOps(
+        OPS.paintImageMaskXObject,
+        args,
+        optionalContent
+      );
+
       if (cacheKey) {
         localImageCache.set(cacheKey, imageRef, {
           fn: OPS.paintImageMaskXObject,
           args,
+          optionalContent,
         });
-      }
-
-      if (optionalContent !== undefined) {
-        operatorList.addOp(OPS.endMarkedContent, []);
       }
       return;
     }
@@ -654,11 +719,11 @@ class PartialEvaluator {
       // We force the use of RGBA_32BPP images here, because we can't handle
       // any other kind.
       imgData = imageObj.createImageData(/* forceRGBA = */ true);
-      operatorList.addOp(OPS.paintInlineImageXObject, [imgData]);
-
-      if (optionalContent !== undefined) {
-        operatorList.addOp(OPS.endMarkedContent, []);
-      }
+      operatorList.addImageOps(
+        OPS.paintInlineImageXObject,
+        [imgData],
+        optionalContent
+      );
       return;
     }
 
@@ -706,11 +771,13 @@ class PartialEvaluator {
         return this._sendImgData(objId, /* imgData = */ null, cacheGlobally);
       });
 
-    operatorList.addOp(OPS.paintImageXObject, args);
+    operatorList.addImageOps(OPS.paintImageXObject, args, optionalContent);
+
     if (cacheKey) {
       localImageCache.set(cacheKey, imageRef, {
         fn: OPS.paintImageXObject,
         args,
+        optionalContent,
       });
 
       if (imageRef) {
@@ -722,14 +789,11 @@ class PartialEvaluator {
             objId,
             fn: OPS.paintImageXObject,
             args,
+            optionalContent,
             byteSize: 0, // Temporary entry, note `addByteSize` above.
           });
         }
       }
-    }
-
-    if (optionalContent !== undefined) {
-      operatorList.addOp(OPS.endMarkedContent, []);
     }
   }
 
@@ -1112,10 +1176,9 @@ class PartialEvaluator {
     let fontRef;
     if (font) {
       // Loading by ref.
-      if (!(font instanceof Ref)) {
-        throw new FormatError('The "font" object should be a reference.');
+      if (font instanceof Ref) {
+        fontRef = font;
       }
-      fontRef = font;
     } else {
       // Loading by name.
       const fontRes = resources.get("Font");
@@ -1296,6 +1359,7 @@ class PartialEvaluator {
     if (!args) {
       args = [];
     }
+    let minMax;
     if (
       lastIndex < 0 ||
       operatorList.fnArray[lastIndex] !== OPS.constructPath
@@ -1312,7 +1376,8 @@ class PartialEvaluator {
         operatorList.addOp(OPS.save, null);
       }
 
-      operatorList.addOp(OPS.constructPath, [[fn], args]);
+      minMax = [Infinity, -Infinity, Infinity, -Infinity];
+      operatorList.addOp(OPS.constructPath, [[fn], args, minMax]);
 
       if (parsingText) {
         operatorList.addOp(OPS.restore, null);
@@ -1321,6 +1386,28 @@ class PartialEvaluator {
       const opArgs = operatorList.argsArray[lastIndex];
       opArgs[0].push(fn);
       Array.prototype.push.apply(opArgs[1], args);
+      minMax = opArgs[2];
+    }
+
+    // Compute min/max in the worker instead of the main thread.
+    // If the current matrix (when drawing) is a scaling one
+    // then min/max can be easily computed in using those values.
+    // Only rectangle, lineTo and moveTo are handled here since
+    // Bezier stuff requires to have the starting point.
+    switch (fn) {
+      case OPS.rectangle:
+        minMax[0] = Math.min(minMax[0], args[0], args[0] + args[2]);
+        minMax[1] = Math.max(minMax[1], args[0], args[0] + args[2]);
+        minMax[2] = Math.min(minMax[2], args[1], args[1] + args[3]);
+        minMax[3] = Math.max(minMax[3], args[1], args[1] + args[3]);
+        break;
+      case OPS.moveTo:
+      case OPS.lineTo:
+        minMax[0] = Math.min(minMax[0], args[0]);
+        minMax[1] = Math.max(minMax[1], args[0]);
+        minMax[2] = Math.min(minMax[2], args[1]);
+        minMax[3] = Math.max(minMax[3], args[1]);
+        break;
     }
   }
 
@@ -1620,7 +1707,13 @@ class PartialEvaluator {
             if (isValidName) {
               const localImage = localImageCache.getByName(name);
               if (localImage) {
-                operatorList.addOp(localImage.fn, localImage.args);
+                operatorList.addImageOps(
+                  localImage.fn,
+                  localImage.args,
+                  localImage.optionalContent
+                );
+
+                incrementCachedImageMaskCount(localImage);
                 args = null;
                 continue;
               }
@@ -1636,8 +1729,13 @@ class PartialEvaluator {
                 if (xobj instanceof Ref) {
                   const localImage = localImageCache.getByRef(xobj);
                   if (localImage) {
-                    operatorList.addOp(localImage.fn, localImage.args);
+                    operatorList.addImageOps(
+                      localImage.fn,
+                      localImage.args,
+                      localImage.optionalContent
+                    );
 
+                    incrementCachedImageMaskCount(localImage);
                     resolveXObject();
                     return;
                   }
@@ -1648,7 +1746,11 @@ class PartialEvaluator {
                   );
                   if (globalImage) {
                     operatorList.addDependency(globalImage.objId);
-                    operatorList.addOp(globalImage.fn, globalImage.args);
+                    operatorList.addImageOps(
+                      globalImage.fn,
+                      globalImage.args,
+                      globalImage.optionalContent
+                    );
 
                     resolveXObject();
                     return;
@@ -1753,7 +1855,13 @@ class PartialEvaluator {
             if (cacheKey) {
               const localImage = localImageCache.getByName(cacheKey);
               if (localImage) {
-                operatorList.addOp(localImage.fn, localImage.args);
+                operatorList.addImageOps(
+                  localImage.fn,
+                  localImage.args,
+                  localImage.optionalContent
+                );
+
+                incrementCachedImageMaskCount(localImage);
                 args = null;
                 continue;
               }
@@ -2957,7 +3065,7 @@ class PartialEvaluator {
               }
             }
 
-            const item = elements[elements.length - 1];
+            const item = elements.at(-1);
             if (typeof item === "string") {
               showSpacedTextBuffer.push(item);
             }
@@ -3181,6 +3289,7 @@ class PartialEvaluator {
             );
             return;
           case OPS.beginMarkedContent:
+            flushTextContentItem();
             if (includeMarkedContent) {
               textContent.items.push({
                 type: "beginMarkedContent",
@@ -3189,8 +3298,8 @@ class PartialEvaluator {
             }
             break;
           case OPS.beginMarkedContentProps:
+            flushTextContentItem();
             if (includeMarkedContent) {
-              flushTextContentItem();
               let mcid = null;
               if (args[1] instanceof Dict) {
                 mcid = args[1].get("MCID");
@@ -3205,8 +3314,8 @@ class PartialEvaluator {
             }
             break;
           case OPS.endMarkedContent:
+            flushTextContentItem();
             if (includeMarkedContent) {
-              flushTextContentItem();
               textContent.items.push({
                 type: "endMarkedContent",
               });
@@ -3264,9 +3373,16 @@ class PartialEvaluator {
         };
       }
 
-      const cidToGidMap = dict.get("CIDToGIDMap");
-      if (cidToGidMap instanceof BaseStream) {
-        cidToGidBytes = cidToGidMap.getBytes();
+      try {
+        const cidToGidMap = dict.get("CIDToGIDMap");
+        if (cidToGidMap instanceof BaseStream) {
+          cidToGidBytes = cidToGidMap.getBytes();
+        }
+      } catch (ex) {
+        if (!this.options.ignoreErrors) {
+          throw ex;
+        }
+        warn(`extractDataStructures - ignoring CIDToGIDMap data: "${ex}".`);
       }
     }
 
@@ -3305,7 +3421,12 @@ class PartialEvaluator {
       } else if (encoding instanceof Name) {
         baseEncodingName = encoding.name;
       } else {
-        throw new FormatError("Encoding is not a Name nor a Dict");
+        const msg = "Encoding is not a Name nor a Dict";
+
+        if (!this.options.ignoreErrors) {
+          throw new FormatError(msg);
+        }
+        warn(msg);
       }
       // According to table 114 if the encoding is a named encoding it must be
       // one of these predefined encodings.
@@ -4289,8 +4410,10 @@ class TranslatedFont {
     const fontResources = this.dict.get("Resources") || resources;
     const charProcOperatorList = Object.create(null);
 
-    const isEmptyBBox =
-      !translatedFont.bbox || isArrayEqual(translatedFont.bbox, [0, 0, 0, 0]);
+    const fontBBox = Util.normalizeRect(translatedFont.bbox || [0, 0, 0, 0]),
+      width = fontBBox[2] - fontBBox[0],
+      height = fontBBox[3] - fontBBox[1];
+    const fontBBoxSize = Math.hypot(width, height);
 
     for (const key of charProcs.getKeys()) {
       loadCharProcsPromise = loadCharProcsPromise.then(() => {
@@ -4311,7 +4434,7 @@ class TranslatedFont {
             //   colour-related parameters) in the graphics state;
             //   any use of such operators shall be ignored."
             if (operatorList.fnArray[0] === OPS.setCharWidthAndBounds) {
-              this._removeType3ColorOperators(operatorList, isEmptyBBox);
+              this._removeType3ColorOperators(operatorList, fontBBoxSize);
             }
             charProcOperatorList[key] = operatorList.getIR();
 
@@ -4339,7 +4462,7 @@ class TranslatedFont {
   /**
    * @private
    */
-  _removeType3ColorOperators(operatorList, isEmptyBBox = false) {
+  _removeType3ColorOperators(operatorList, fontBBoxSize = NaN) {
     if (
       typeof PDFJSDev === "undefined" ||
       PDFJSDev.test("!PRODUCTION || TESTING")
@@ -4349,21 +4472,37 @@ class TranslatedFont {
         "Type3 glyph shall start with the d1 operator."
       );
     }
-    if (isEmptyBBox) {
+    const charBBox = Util.normalizeRect(operatorList.argsArray[0].slice(2)),
+      width = charBBox[2] - charBBox[0],
+      height = charBBox[3] - charBBox[1];
+    const charBBoxSize = Math.hypot(width, height);
+
+    if (width === 0 || height === 0) {
+      // Skip the d1 operator when its bounds are bogus (fixes issue14953.pdf).
+      operatorList.fnArray.splice(0, 1);
+      operatorList.argsArray.splice(0, 1);
+    } else if (
+      fontBBoxSize === 0 ||
+      Math.round(charBBoxSize / fontBBoxSize) >= 10
+    ) {
+      // Override the fontBBox when it's undefined/empty, or when it's at least
+      // (approximately) one order of magnitude smaller than the charBBox
+      // (fixes issue14999_reduced.pdf).
       if (!this._bbox) {
         this._bbox = [Infinity, Infinity, -Infinity, -Infinity];
       }
-      const charBBox = Util.normalizeRect(operatorList.argsArray[0].slice(2));
-
       this._bbox[0] = Math.min(this._bbox[0], charBBox[0]);
       this._bbox[1] = Math.min(this._bbox[1], charBBox[1]);
       this._bbox[2] = Math.max(this._bbox[2], charBBox[2]);
       this._bbox[3] = Math.max(this._bbox[3], charBBox[3]);
     }
-    let i = 1,
+
+    let i = 0,
       ii = operatorList.length;
     while (i < ii) {
       switch (operatorList.fnArray[i]) {
+        case OPS.setCharWidthAndBounds:
+          break; // Handled above.
         case OPS.setStrokeColorSpace:
         case OPS.setFillColorSpace:
         case OPS.setStrokeColor:
@@ -4651,6 +4790,7 @@ class EvaluatorPreprocessor {
     });
     this.stateManager = stateManager;
     this.nonProcessedArgs = [];
+    this._isPathOp = false;
     this._numInvalidPathOPS = 0;
   }
 
@@ -4696,6 +4836,13 @@ class EvaluatorPreprocessor {
         const numArgs = opSpec.numArgs;
         let argsLength = args !== null ? args.length : 0;
 
+        // If the *previous* command wasn't a path operator, reset the heuristic
+        // used with incomplete path operators below (fixes issue14917.pdf).
+        if (!this._isPathOp) {
+          this._numInvalidPathOPS = 0;
+        }
+        this._isPathOp = fn >= OPS.moveTo && fn <= OPS.endPath;
+
         if (!opSpec.variableArgs) {
           // Postscript commands can be nested, e.g. /F2 /GS2 gs 5.711 Tf
           if (argsLength !== numArgs) {
@@ -4723,8 +4870,7 @@ class EvaluatorPreprocessor {
             // used to error, rather than just warn, once a number of invalid
             // path operators have been encountered (fixes bug1443140.pdf).
             if (
-              fn >= OPS.moveTo &&
-              fn <= OPS.endPath && // Path operator
+              this._isPathOp &&
               ++this._numInvalidPathOPS >
                 EvaluatorPreprocessor.MAX_INVALID_PATH_OPS
             ) {

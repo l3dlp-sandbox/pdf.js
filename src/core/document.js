@@ -19,7 +19,6 @@ import {
   info,
   InvalidPDFException,
   isArrayEqual,
-  OPS,
   PageActionEventType,
   RenderingIntentFlag,
   shadow,
@@ -34,6 +33,7 @@ import {
 import {
   collectActions,
   getInheritableProperty,
+  getNewAnnotationsMap,
   isWhiteSpace,
   MissingDataException,
   validateCSSFont,
@@ -47,6 +47,7 @@ import { BaseStream } from "./base_stream.js";
 import { calculateMD5 } from "./crypto.js";
 import { Catalog } from "./catalog.js";
 import { clearGlobalCaches } from "./cleanup_helper.js";
+import { DatasetReader } from "./dataset_reader.js";
 import { Linearization } from "./parser.js";
 import { NullStream } from "./stream.js";
 import { ObjectLoader } from "./object_loader.js";
@@ -54,6 +55,7 @@ import { OperatorList } from "./operator_list.js";
 import { PartialEvaluator } from "./evaluator.js";
 import { StreamsSequenceStream } from "./decode_stream.js";
 import { StructTreePage } from "./struct_tree.js";
+import { writeObject } from "./writer.js";
 import { XFAFactory } from "./xfa/factory.js";
 import { XRef } from "./xref.js";
 
@@ -130,10 +132,12 @@ class Page {
     // For robustness: The spec states that a \Resources entry has to be
     // present, but can be empty. Some documents still omit it; in this case
     // we return an empty dictionary.
+    const resources = this._getInheritableProperty("Resources");
+
     return shadow(
       this,
       "resources",
-      this._getInheritableProperty("Resources") || Dict.empty
+      resources instanceof Dict ? resources : Dict.empty
     );
   }
 
@@ -260,6 +264,61 @@ class Page {
     );
   }
 
+  async saveNewAnnotations(handler, task, annotations) {
+    if (this.xfaFactory) {
+      throw new Error("XFA: Cannot save new annotations.");
+    }
+
+    const partialEvaluator = new PartialEvaluator({
+      xref: this.xref,
+      handler,
+      pageIndex: this.pageIndex,
+      idFactory: this._localIdFactory,
+      fontCache: this.fontCache,
+      builtInCMapCache: this.builtInCMapCache,
+      standardFontDataCache: this.standardFontDataCache,
+      globalImageCache: this.globalImageCache,
+      options: this.evaluatorOptions,
+    });
+
+    const pageDict = this.pageDict;
+    const annotationsArray = this.annotations.slice();
+    const newData = await AnnotationFactory.saveNewAnnotations(
+      partialEvaluator,
+      task,
+      annotations
+    );
+
+    for (const { ref } of newData.annotations) {
+      annotationsArray.push(ref);
+    }
+
+    const savedDict = pageDict.get("Annots");
+    pageDict.set("Annots", annotationsArray);
+    const buffer = [];
+
+    let transform = null;
+    if (this.xref.encrypt) {
+      transform = this.xref.encrypt.createCipherTransform(
+        this.ref.num,
+        this.ref.gen
+      );
+    }
+
+    writeObject(this.ref, pageDict, buffer, transform);
+    if (savedDict) {
+      pageDict.set("Annots", savedDict);
+    }
+
+    const objects = newData.dependencies;
+    objects.push(
+      { ref: this.ref, data: buffer.join("") },
+      ...newData.annotations
+    );
+
+    return objects;
+  }
+
   save(handler, task, annotationStorage) {
     const partialEvaluator = new PartialEvaluator({
       xref: this.xref,
@@ -294,7 +353,9 @@ class Page {
         );
       }
 
-      return Promise.all(newRefsPromises);
+      return Promise.all(newRefsPromises).then(function (newRefs) {
+        return newRefs.filter(newRef => !!newRef);
+      });
     });
   }
 
@@ -340,6 +401,21 @@ class Page {
       options: this.evaluatorOptions,
     });
 
+    const newAnnotationsByPage = !this.xfaFactory
+      ? getNewAnnotationsMap(annotationStorage)
+      : null;
+
+    let newAnnotationsPromise = Promise.resolve(null);
+    if (newAnnotationsByPage) {
+      const newAnnotations = newAnnotationsByPage.get(this.pageIndex);
+      if (newAnnotations) {
+        newAnnotationsPromise = AnnotationFactory.printNewAnnotations(
+          partialEvaluator,
+          task,
+          newAnnotations
+        );
+      }
+    }
     const dataPromises = Promise.all([contentStreamPromise, resourcesPromise]);
     const pageListPromise = dataPromises.then(([contentStream]) => {
       const opList = new OperatorList(intent, sink);
@@ -367,60 +443,63 @@ class Page {
 
     // Fetch the page's annotations and add their operator lists to the
     // page's operator list to render them.
-    return Promise.all([pageListPromise, this._parsedAnnotations]).then(
-      function ([pageOpList, annotations]) {
-        if (
-          annotations.length === 0 ||
-          intent & RenderingIntentFlag.ANNOTATIONS_DISABLE
-        ) {
-          pageOpList.flush(true);
-          return { length: pageOpList.totalLength };
-        }
-        const renderForms = !!(intent & RenderingIntentFlag.ANNOTATIONS_FORMS),
-          intentAny = !!(intent & RenderingIntentFlag.ANY),
-          intentDisplay = !!(intent & RenderingIntentFlag.DISPLAY),
-          intentPrint = !!(intent & RenderingIntentFlag.PRINT);
-
-        // Collect the operator list promises for the annotations. Each promise
-        // is resolved with the complete operator list for a single annotation.
-        const opListPromises = [];
-        for (const annotation of annotations) {
-          if (
-            intentAny ||
-            (intentDisplay && annotation.mustBeViewed(annotationStorage)) ||
-            (intentPrint && annotation.mustBePrinted(annotationStorage))
-          ) {
-            opListPromises.push(
-              annotation
-                .getOperatorList(
-                  partialEvaluator,
-                  task,
-                  intent,
-                  renderForms,
-                  annotationStorage
-                )
-                .catch(function (reason) {
-                  warn(
-                    "getOperatorList - ignoring annotation data during " +
-                      `"${task.name}" task: "${reason}".`
-                  );
-                  return null;
-                })
-            );
-          }
-        }
-
-        return Promise.all(opListPromises).then(function (opLists) {
-          pageOpList.addOp(OPS.beginAnnotations, []);
-          for (const opList of opLists) {
-            pageOpList.addOpList(opList);
-          }
-          pageOpList.addOp(OPS.endAnnotations, []);
-          pageOpList.flush(true);
-          return { length: pageOpList.totalLength };
-        });
+    return Promise.all([
+      pageListPromise,
+      this._parsedAnnotations,
+      newAnnotationsPromise,
+    ]).then(function ([pageOpList, annotations, newAnnotations]) {
+      if (newAnnotations) {
+        annotations = annotations.concat(newAnnotations);
       }
-    );
+      if (
+        annotations.length === 0 ||
+        intent & RenderingIntentFlag.ANNOTATIONS_DISABLE
+      ) {
+        pageOpList.flush(true);
+        return { length: pageOpList.totalLength };
+      }
+      const renderForms = !!(intent & RenderingIntentFlag.ANNOTATIONS_FORMS),
+        intentAny = !!(intent & RenderingIntentFlag.ANY),
+        intentDisplay = !!(intent & RenderingIntentFlag.DISPLAY),
+        intentPrint = !!(intent & RenderingIntentFlag.PRINT);
+
+      // Collect the operator list promises for the annotations. Each promise
+      // is resolved with the complete operator list for a single annotation.
+      const opListPromises = [];
+      for (const annotation of annotations) {
+        if (
+          intentAny ||
+          (intentDisplay && annotation.mustBeViewed(annotationStorage)) ||
+          (intentPrint && annotation.mustBePrinted(annotationStorage))
+        ) {
+          opListPromises.push(
+            annotation
+              .getOperatorList(
+                partialEvaluator,
+                task,
+                intent,
+                renderForms,
+                annotationStorage
+              )
+              .catch(function (reason) {
+                warn(
+                  "getOperatorList - ignoring annotation data during " +
+                    `"${task.name}" task: "${reason}".`
+                );
+                return null;
+              })
+          );
+        }
+      }
+
+      return Promise.all(opListPromises).then(function (opLists) {
+        for (const opList of opLists) {
+          pageOpList.addOpList(opList);
+        }
+        pageOpList.flush(true);
+        return { length: pageOpList.totalLength };
+      });
+    });
   }
 
   extractTextContent({
@@ -820,7 +899,7 @@ class PDFDocument {
     });
   }
 
-  get xfaData() {
+  get _xfaStreams() {
     const acroForm = this.catalog.acroForm;
     if (!acroForm) {
       return null;
@@ -838,13 +917,8 @@ class PDFDocument {
       "/xdp:xdp": "",
     };
     if (xfa instanceof BaseStream && !xfa.isEmpty) {
-      try {
-        entries["xdp:xdp"] = stringToUTF8String(xfa.getString());
-        return entries;
-      } catch (_) {
-        warn("XFA - Invalid utf-8 string.");
-        return null;
-      }
+      entries["xdp:xdp"] = xfa;
+      return entries;
     }
 
     if (!Array.isArray(xfa) || xfa.length === 0) {
@@ -868,14 +942,51 @@ class PDFDocument {
       if (!(data instanceof BaseStream) || data.isEmpty) {
         continue;
       }
+      entries[name] = data;
+    }
+    return entries;
+  }
+
+  get xfaDatasets() {
+    const streams = this._xfaStreams;
+    if (!streams) {
+      return shadow(this, "xfaDatasets", null);
+    }
+    for (const key of ["datasets", "xdp:xdp"]) {
+      const stream = streams[key];
+      if (!stream) {
+        continue;
+      }
       try {
-        entries[name] = stringToUTF8String(data.getString());
+        const str = stringToUTF8String(stream.getString());
+        const data = { [key]: str };
+        return shadow(this, "xfaDatasets", new DatasetReader(data));
+      } catch (_) {
+        warn("XFA - Invalid utf-8 string.");
+        break;
+      }
+    }
+    return shadow(this, "xfaDatasets", null);
+  }
+
+  get xfaData() {
+    const streams = this._xfaStreams;
+    if (!streams) {
+      return null;
+    }
+    const data = Object.create(null);
+    for (const [key, stream] of Object.entries(streams)) {
+      if (!stream) {
+        continue;
+      }
+      try {
+        data[key] = stringToUTF8String(stream.getString());
       } catch (_) {
         warn("XFA - Invalid utf-8 string.");
         return null;
       }
     }
-    return entries;
+    return data;
   }
 
   get xfaFactory() {
@@ -957,7 +1068,7 @@ class PDFDocument {
     const pdfFonts = [];
     const initialState = {
       get font() {
-        return pdfFonts[pdfFonts.length - 1];
+        return pdfFonts.at(-1);
       },
       set font(font) {
         pdfFonts.push(font);

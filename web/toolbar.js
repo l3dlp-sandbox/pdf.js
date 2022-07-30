@@ -17,10 +17,12 @@ import {
   animationStarted,
   DEFAULT_SCALE,
   DEFAULT_SCALE_VALUE,
+  docStyle,
   MAX_SCALE,
   MIN_SCALE,
   noContextMenuHandler,
 } from "./ui_utils.js";
+import { AnnotationEditorType } from "pdfjs-lib";
 
 const PAGE_NUMBER_LOADING_INDICATOR = "visiblePageIsLoading";
 
@@ -42,6 +44,9 @@ const PAGE_NUMBER_LOADING_INDICATOR = "visiblePageIsLoading";
  * @property {HTMLButtonElement} openFile - Button to open a new document.
  * @property {HTMLButtonElement} presentationModeButton - Button to switch to
  *   presentation mode.
+ * @property {HTMLButtonElement} editorNoneButton - Button to disable editing.
+ * @property {HTMLButtonElement} editorFreeTextButton - Button to switch to
+ *   FreeText editing.
  * @property {HTMLButtonElement} download - Button to download the document.
  * @property {HTMLAnchorElement} viewBookmark - Button to obtain a bookmark link
  *   to the current location in the document.
@@ -62,7 +67,6 @@ class Toolbar {
       { element: options.next, eventName: "nextpage" },
       { element: options.zoomIn, eventName: "zoomin" },
       { element: options.zoomOut, eventName: "zoomout" },
-      { element: options.openFile, eventName: "openfile" },
       { element: options.print, eventName: "print" },
       {
         element: options.presentationModeButton,
@@ -70,7 +74,25 @@ class Toolbar {
       },
       { element: options.download, eventName: "download" },
       { element: options.viewBookmark, eventName: null },
+      {
+        element: options.editorNoneButton,
+        eventName: "switchannotationeditormode",
+        eventDetails: { mode: AnnotationEditorType.NONE },
+      },
+      {
+        element: options.editorFreeTextButton,
+        eventName: "switchannotationeditormode",
+        eventDetails: { mode: AnnotationEditorType.FREETEXT },
+      },
+      {
+        element: options.editorInkButton,
+        eventName: "switchannotationeditormode",
+        eventDetails: { mode: AnnotationEditorType.INK },
+      },
     ];
+    if (typeof PDFJSDev === "undefined" || PDFJSDev.test("GENERIC")) {
+      this.buttons.push({ element: options.openFile, eventName: "openfile" });
+    }
     this.items = {
       numPages: options.numPages,
       pageNumber: options.pageNumber,
@@ -80,13 +102,18 @@ class Toolbar {
       next: options.next,
       zoomIn: options.zoomIn,
       zoomOut: options.zoomOut,
+      editorNoneButton: options.editorNoneButton,
+      editorFreeTextButton: options.editorFreeTextButton,
+      editorFreeTextParamsToolbar: options.editorFreeTextParamsToolbar,
+      editorInkButton: options.editorInkButton,
+      editorInkParamsToolbar: options.editorInkParamsToolbar,
     };
 
     this._wasLocalized = false;
     this.reset();
 
     // Bind the event listeners for click and various other actions.
-    this._bindListeners();
+    this._bindListeners(options);
   }
 
   setPageNumber(pageNumber, pageLabel) {
@@ -116,17 +143,26 @@ class Toolbar {
     this.pageScale = DEFAULT_SCALE;
     this._updateUIState(true);
     this.updateLoadingIndicatorState();
+
+    // Reset the Editor buttons too, since they're document specific.
+    this.eventBus.dispatch("toolbarreset", { source: this });
   }
 
-  _bindListeners() {
+  _bindListeners(options) {
     const { pageNumber, scaleSelect } = this.items;
     const self = this;
 
     // The buttons within the toolbar.
-    for (const { element, eventName } of this.buttons) {
+    for (const { element, eventName, eventDetails } of this.buttons) {
       element.addEventListener("click", evt => {
         if (eventName !== null) {
-          this.eventBus.dispatch(eventName, { source: this });
+          const details = { source: this };
+          if (eventDetails) {
+            for (const property in eventDetails) {
+              details[property] = eventDetails[property];
+            }
+          }
+          this.eventBus.dispatch(eventName, details);
         }
       });
     }
@@ -168,8 +204,54 @@ class Toolbar {
 
     this.eventBus._on("localized", () => {
       this._wasLocalized = true;
-      this._adjustScaleWidth();
+      this.#adjustScaleWidth();
       this._updateUIState(true);
+    });
+
+    this.#bindEditorToolsListener(options);
+  }
+
+  #bindEditorToolsListener({
+    editorNoneButton,
+    editorFreeTextButton,
+    editorFreeTextParamsToolbar,
+    editorInkButton,
+    editorInkParamsToolbar,
+  }) {
+    const editorModeChanged = (evt, disableButtons = false) => {
+      const editorButtons = [
+        { mode: AnnotationEditorType.NONE, button: editorNoneButton },
+        {
+          mode: AnnotationEditorType.FREETEXT,
+          button: editorFreeTextButton,
+          toolbar: editorFreeTextParamsToolbar,
+        },
+        {
+          mode: AnnotationEditorType.INK,
+          button: editorInkButton,
+          toolbar: editorInkParamsToolbar,
+        },
+      ];
+
+      for (const { mode, button, toolbar } of editorButtons) {
+        const checked = mode === evt.mode;
+        button.classList.toggle("toggled", checked);
+        button.setAttribute("aria-checked", checked);
+        button.disabled = disableButtons;
+        if (toolbar) {
+          toolbar.classList.toggle("hidden", !checked);
+        }
+      }
+    };
+    this.eventBus._on("annotationeditormodechanged", editorModeChanged);
+
+    this.eventBus._on("toolbarreset", evt => {
+      if (evt.source === this) {
+        editorModeChanged(
+          { mode: AnnotationEditorType.NONE },
+          /* disableButtons = */ true
+        );
+      }
     });
   }
 
@@ -227,17 +309,16 @@ class Toolbar {
   }
 
   updateLoadingIndicatorState(loading = false) {
-    const pageNumberInput = this.items.pageNumber;
+    const { pageNumber } = this.items;
 
-    pageNumberInput.classList.toggle(PAGE_NUMBER_LOADING_INDICATOR, loading);
+    pageNumber.classList.toggle(PAGE_NUMBER_LOADING_INDICATOR, loading);
   }
 
   /**
    * Increase the width of the zoom dropdown DOM element if, and only if, it's
    * too narrow to fit the *longest* of the localized strings.
-   * @private
    */
-  async _adjustScaleWidth() {
+  async #adjustScaleWidth() {
     const { items, l10n } = this;
 
     const predefinedValuesPromise = Promise.all([
@@ -246,6 +327,7 @@ class Toolbar {
       l10n.get("page_scale_fit"),
       l10n.get("page_scale_width"),
     ]);
+    await animationStarted;
 
     const style = getComputedStyle(items.scaleSelect),
       scaleSelectContainerWidth = parseInt(
@@ -258,16 +340,8 @@ class Toolbar {
       );
 
     // The temporary canvas is used to measure text length in the DOM.
-    let canvas = document.createElement("canvas");
-    if (
-      typeof PDFJSDev === "undefined" ||
-      PDFJSDev.test("MOZCENTRAL || GENERIC")
-    ) {
-      canvas.mozOpaque = true;
-    }
-    let ctx = canvas.getContext("2d", { alpha: false });
-
-    await animationStarted;
+    const canvas = document.createElement("canvas");
+    const ctx = canvas.getContext("2d", { alpha: false });
     ctx.font = `${style.fontSize} ${style.fontFamily}`;
 
     let maxWidth = 0;
@@ -280,14 +354,12 @@ class Toolbar {
     maxWidth += 2 * scaleSelectOverflow;
 
     if (maxWidth > scaleSelectContainerWidth) {
-      const doc = document.documentElement;
-      doc.style.setProperty("--scale-select-container-width", `${maxWidth}px`);
+      docStyle.setProperty("--scale-select-container-width", `${maxWidth}px`);
     }
     // Zeroing the width and height cause Firefox to release graphics resources
     // immediately, which can greatly reduce memory consumption.
     canvas.width = 0;
     canvas.height = 0;
-    canvas = ctx = null;
   }
 }
 

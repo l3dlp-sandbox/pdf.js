@@ -18,6 +18,7 @@
 !issue2391-2.pdf
 !issue14046.pdf
 !issue7891_bc1.pdf
+!issue14881.pdf
 !issue3214.pdf
 !issue4665.pdf
 !issue4684.pdf
@@ -48,11 +49,13 @@
 !issue7426.pdf
 !issue7439.pdf
 !issue7847_radial.pdf
+!issue14953.pdf
 !issue7446.pdf
 !issue7492.pdf
 !issue7544.pdf
 !issue7507.pdf
 !issue6931_reduced.pdf
+!issue14847.pdf
 !doc_actions.pdf
 !issue7580.pdf
 !issue7598.pdf
@@ -118,6 +121,7 @@
 !issue13916.pdf
 !issue14023.pdf
 !issue14438.pdf
+!issue14999_reduced.pdf
 !bad-PageLabels.pdf
 !decodeACSuccessive.pdf
 !issue13003.pdf
@@ -129,6 +133,7 @@
 !asciihexdecode.pdf
 !bug766086.pdf
 !bug793632.pdf
+!issue14821.pdf
 !bug1020858.pdf
 !prefilled_f1040.pdf
 !bug1050040.pdf
@@ -238,6 +243,7 @@
 !pdfjsbad1586.pdf
 !standard_fonts.pdf
 !freeculture.pdf
+!issue14802.pdf
 !issue6006.pdf
 !pdfkit_compressed.pdf
 !TAMReview.pdf
@@ -502,8 +508,11 @@
 !xfa_issue14315.pdf
 !poppler-67295-0.pdf
 !poppler-85140-0.pdf
+!issue15012.pdf
+!issue15150.pdf
 !poppler-395-0-fuzzed.pdf
 !GHOSTSCRIPT-698804-1-fuzzed.pdf
+!issue14814.pdf
 !poppler-91414-0-53.pdf
 !poppler-91414-0-54.pdf
 !poppler-742-0-fuzzed.pdf
@@ -516,3 +525,11 @@
 !issue14502.pdf
 !issue13211.pdf
 !issue14627.pdf
+!issue14862.pdf
+!issue14705.pdf
+!bug1771477.pdf
+!bug1724918.pdf
+!issue15053.pdf
+!bug1675139.pdf
+!issue15092.pdf
+!bug1782186.pdf

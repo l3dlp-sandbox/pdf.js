@@ -15,10 +15,20 @@
 
 import { bytesToString, escapeString, warn } from "../shared/util.js";
 import { Dict, Name, Ref } from "./primitives.js";
-import { escapePDFName, parseXFAPath } from "./core_utils.js";
+import { escapePDFName, numberToString, parseXFAPath } from "./core_utils.js";
 import { SimpleDOMNode, SimpleXMLParser } from "./xml_parser.js";
 import { BaseStream } from "./base_stream.js";
 import { calculateMD5 } from "./crypto.js";
+
+function writeObject(ref, obj, buffer, transform) {
+  buffer.push(`${ref.num} ${ref.gen} obj\n`);
+  if (obj instanceof Dict) {
+    writeDict(obj, buffer, transform);
+  } else if (obj instanceof BaseStream) {
+    writeStream(obj, buffer, transform);
+  }
+  buffer.push("\nendobj\n");
+}
 
 function writeDict(dict, buffer, transform) {
   buffer.push("<<");
@@ -51,23 +61,6 @@ function writeArray(array, buffer, transform) {
     writeValue(val, buffer, transform);
   }
   buffer.push("]");
-}
-
-function numberToString(value) {
-  if (Number.isInteger(value)) {
-    return value.toString();
-  }
-
-  const roundedValue = Math.round(value * 100);
-  if (roundedValue % 100 === 0) {
-    return (roundedValue / 100).toString();
-  }
-
-  if (roundedValue % 10 === 0) {
-    return value.toFixed(1);
-  }
-
-  return value.toFixed(2);
 }
 
 function writeValue(value, buffer, transform) {
@@ -143,7 +136,11 @@ function writeXFADataForAcroform(str, newRefs) {
     }
     const node = xml.documentElement.searchNode(parseXFAPath(path), 0);
     if (node) {
-      node.childNodes = [new SimpleDOMNode("#text", value)];
+      if (Array.isArray(value)) {
+        node.childNodes = value.map(val => new SimpleDOMNode("value", val));
+      } else {
+        node.childNodes = [new SimpleDOMNode("#text", value)];
+      }
     } else {
       warn(`Node not found for path: ${path}`);
     }
@@ -252,7 +249,7 @@ function incrementalUpdate({
   const refForXrefTable = xrefInfo.newRef;
 
   let buffer, baseOffset;
-  const lastByte = originalData[originalData.length - 1];
+  const lastByte = originalData.at(-1);
   if (lastByte === /* \n */ 0x0a || lastByte === /* \r */ 0x0d) {
     buffer = [];
     baseOffset = originalData.length;
@@ -341,4 +338,4 @@ function incrementalUpdate({
   return array;
 }
 
-export { incrementalUpdate, writeDict };
+export { incrementalUpdate, writeDict, writeObject };
