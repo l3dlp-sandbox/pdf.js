@@ -22,6 +22,7 @@ import {
   AnnotationEditorType,
   shadow,
   Util,
+  warn,
 } from "../../shared/util.js";
 import { getColorValues, getRGB } from "../display_utils.js";
 
@@ -281,53 +282,6 @@ class KeyboardManager {
   }
 }
 
-/**
- * Basic clipboard to copy/paste some editors.
- * It has to be used as a singleton.
- */
-class ClipboardManager {
-  #elements = null;
-
-  /**
-   * Copy an element.
-   * @param {AnnotationEditor|Array<AnnotationEditor>} element
-   */
-  copy(element) {
-    if (!element) {
-      return;
-    }
-    if (Array.isArray(element)) {
-      this.#elements = element.map(el => el.serialize());
-    } else {
-      this.#elements = [element.serialize()];
-    }
-    this.#elements = this.#elements.filter(el => !!el);
-    if (this.#elements.length === 0) {
-      this.#elements = null;
-    }
-  }
-
-  /**
-   * Create a new element.
-   * @returns {AnnotationEditor|null}
-   */
-  paste() {
-    return this.#elements;
-  }
-
-  /**
-   * Check if the clipboard is empty.
-   * @returns {boolean}
-   */
-  isEmpty() {
-    return this.#elements === null;
-  }
-
-  destroy() {
-    this.#elements = null;
-  }
-}
-
 class ColorManager {
   static _colorsMapping = new Map([
     ["CanvasText", [0, 0, 0]],
@@ -404,8 +358,6 @@ class AnnotationEditorUIManager {
 
   #allLayers = new Map();
 
-  #clipboardManager = new ClipboardManager();
-
   #commandManager = new CommandManager();
 
   #currentPageIndex = 0;
@@ -422,18 +374,21 @@ class AnnotationEditorUIManager {
 
   #selectedEditors = new Set();
 
+  #boundCopy = this.copy.bind(this);
+
+  #boundCut = this.cut.bind(this);
+
+  #boundPaste = this.paste.bind(this);
+
   #boundKeydown = this.keydown.bind(this);
 
   #boundOnEditingAction = this.onEditingAction.bind(this);
 
   #boundOnPageChanging = this.onPageChanging.bind(this);
 
-  #boundOnTextLayerRendered = this.onTextLayerRendered.bind(this);
-
   #previousStates = {
     isEditing: false,
     isEmpty: true,
-    hasEmptyClipboard: true,
     hasSomethingToUndo: false,
     hasSomethingToRedo: false,
     hasSelectedEditor: false,
@@ -443,9 +398,6 @@ class AnnotationEditorUIManager {
 
   static _keyboardManager = new KeyboardManager([
     [["ctrl+a", "mac+meta+a"], AnnotationEditorUIManager.prototype.selectAll],
-    [["ctrl+c", "mac+meta+c"], AnnotationEditorUIManager.prototype.copy],
-    [["ctrl+v", "mac+meta+v"], AnnotationEditorUIManager.prototype.paste],
-    [["ctrl+x", "mac+meta+x"], AnnotationEditorUIManager.prototype.cut],
     [["ctrl+z", "mac+meta+z"], AnnotationEditorUIManager.prototype.undo],
     [
       ["ctrl+y", "ctrl+shift+Z", "mac+meta+shift+Z"],
@@ -474,14 +426,12 @@ class AnnotationEditorUIManager {
     this.#eventBus = eventBus;
     this.#eventBus._on("editingaction", this.#boundOnEditingAction);
     this.#eventBus._on("pagechanging", this.#boundOnPageChanging);
-    this.#eventBus._on("textlayerrendered", this.#boundOnTextLayerRendered);
   }
 
   destroy() {
     this.#removeKeyboardManager();
     this.#eventBus._off("editingaction", this.#boundOnEditingAction);
     this.#eventBus._off("pagechanging", this.#boundOnPageChanging);
-    this.#eventBus._off("textlayerrendered", this.#boundOnTextLayerRendered);
     for (const layer of this.#allLayers.values()) {
       layer.destroy();
     }
@@ -489,18 +439,11 @@ class AnnotationEditorUIManager {
     this.#allEditors.clear();
     this.#activeEditor = null;
     this.#selectedEditors.clear();
-    this.#clipboardManager.destroy();
     this.#commandManager.destroy();
   }
 
   onPageChanging({ pageNumber }) {
     this.#currentPageIndex = pageNumber - 1;
-  }
-
-  onTextLayerRendered({ pageNumber }) {
-    const pageIndex = pageNumber - 1;
-    const layer = this.#allLayers.get(pageIndex);
-    layer?.onTextLayerRendered();
   }
 
   focusMainContainer() {
@@ -515,6 +458,109 @@ class AnnotationEditorUIManager {
 
   #removeKeyboardManager() {
     this.#container.removeEventListener("keydown", this.#boundKeydown);
+  }
+
+  #addCopyPasteListeners() {
+    document.addEventListener("copy", this.#boundCopy);
+    document.addEventListener("cut", this.#boundCut);
+    document.addEventListener("paste", this.#boundPaste);
+  }
+
+  #removeCopyPasteListeners() {
+    document.removeEventListener("copy", this.#boundCopy);
+    document.removeEventListener("cut", this.#boundCut);
+    document.removeEventListener("paste", this.#boundPaste);
+  }
+
+  /**
+   * Copy callback.
+   * @param {ClipboardEvent} event
+   */
+  copy(event) {
+    event.preventDefault();
+
+    if (this.#activeEditor) {
+      // An editor is being edited so just commit it.
+      this.#activeEditor.commitOrRemove();
+    }
+
+    if (!this.hasSelection) {
+      return;
+    }
+
+    const editors = [];
+    for (const editor of this.#selectedEditors) {
+      if (!editor.isEmpty()) {
+        editors.push(editor.serialize());
+      }
+    }
+    if (editors.length === 0) {
+      return;
+    }
+
+    event.clipboardData.setData("application/pdfjs", JSON.stringify(editors));
+  }
+
+  /**
+   * Cut callback.
+   * @param {ClipboardEvent} event
+   */
+  cut(event) {
+    this.copy(event);
+    this.delete();
+  }
+
+  /**
+   * Paste callback.
+   * @param {ClipboardEvent} event
+   */
+  paste(event) {
+    event.preventDefault();
+
+    let data = event.clipboardData.getData("application/pdfjs");
+    if (!data) {
+      return;
+    }
+
+    try {
+      data = JSON.parse(data);
+    } catch (ex) {
+      warn(`paste: "${ex.message}".`);
+      return;
+    }
+
+    if (!Array.isArray(data)) {
+      return;
+    }
+
+    this.unselectAll();
+    const layer = this.#allLayers.get(this.#currentPageIndex);
+
+    try {
+      const newEditors = [];
+      for (const editor of data) {
+        const deserializedEditor = layer.deserialize(editor);
+        if (!deserializedEditor) {
+          return;
+        }
+        newEditors.push(deserializedEditor);
+      }
+
+      const cmd = () => {
+        for (const editor of newEditors) {
+          this.#addEditorToLayer(editor);
+        }
+        this.#selectEditors(newEditors);
+      };
+      const undo = () => {
+        for (const editor of newEditors) {
+          editor.remove();
+        }
+      };
+      this.addCommands({ cmd, undo, mustExec: true });
+    } catch (ex) {
+      warn(`paste: "${ex.message}".`);
+    }
   }
 
   /**
@@ -534,18 +580,14 @@ class AnnotationEditorUIManager {
    * @param {Object} details
    */
   onEditingAction(details) {
-    if (
-      ["undo", "redo", "cut", "copy", "paste", "delete", "selectAll"].includes(
-        details.name
-      )
-    ) {
+    if (["undo", "redo", "delete", "selectAll"].includes(details.name)) {
       this[details.name]();
     }
   }
 
   /**
-   * Update the different possible states of this manager, e.g. is the clipboard
-   * empty or is there something to undo, ...
+   * Update the different possible states of this manager, e.g. is there
+   * something to undo, redo, ...
    * @param {Object} details
    */
   #dispatchUpdateStates(details) {
@@ -577,16 +619,17 @@ class AnnotationEditorUIManager {
   setEditingState(isEditing) {
     if (isEditing) {
       this.#addKeyboardManager();
+      this.#addCopyPasteListeners();
       this.#dispatchUpdateStates({
         isEditing: this.#mode !== AnnotationEditorType.NONE,
         isEmpty: this.#isEmpty(),
         hasSomethingToUndo: this.#commandManager.hasSomethingToUndo(),
         hasSomethingToRedo: this.#commandManager.hasSomethingToRedo(),
         hasSelectedEditor: false,
-        hasEmptyClipboard: this.#clipboardManager.isEmpty(),
       });
     } else {
       this.#removeKeyboardManager();
+      this.#removeCopyPasteListeners();
       this.#dispatchUpdateStates({
         isEditing: false,
       });
@@ -668,6 +711,10 @@ class AnnotationEditorUIManager {
    * @param {*} value
    */
   updateParams(type, value) {
+    if (!this.#editorTypes) {
+      return;
+    }
+
     for (const editor of this.#selectedEditors) {
       editor.updateParams(type, value);
     }
@@ -916,68 +963,6 @@ class AnnotationEditorUIManager {
   }
 
   /**
-   * Copy the selected editor.
-   */
-  copy() {
-    if (this.#activeEditor) {
-      // An editor is being edited so just commit it.
-      this.#activeEditor.commitOrRemove();
-    }
-    if (this.hasSelection) {
-      const editors = [];
-      for (const editor of this.#selectedEditors) {
-        if (!editor.isEmpty()) {
-          editors.push(editor);
-        }
-      }
-      if (editors.length === 0) {
-        return;
-      }
-
-      this.#clipboardManager.copy(editors);
-      this.#dispatchUpdateStates({ hasEmptyClipboard: false });
-    }
-  }
-
-  /**
-   * Cut the selected editor.
-   */
-  cut() {
-    this.copy();
-    this.delete();
-  }
-
-  /**
-   * Paste a previously copied editor.
-   * @returns {undefined}
-   */
-  paste() {
-    if (this.#clipboardManager.isEmpty()) {
-      return;
-    }
-
-    this.unselectAll();
-
-    const layer = this.#allLayers.get(this.#currentPageIndex);
-    const newEditors = this.#clipboardManager
-      .paste()
-      .map(data => layer.deserialize(data));
-
-    const cmd = () => {
-      for (const editor of newEditors) {
-        this.#addEditorToLayer(editor);
-      }
-      this.#selectEditors(newEditors);
-    };
-    const undo = () => {
-      for (const editor of newEditors) {
-        editor.remove();
-      }
-    };
-    this.addCommands({ cmd, undo, mustExec: true });
-  }
-
-  /**
    * Select the editors.
    * @param {Array<AnnotationEditor>} editors
    */
@@ -1013,7 +998,7 @@ class AnnotationEditorUIManager {
       return;
     }
 
-    if (this.#selectEditors.size === 0) {
+    if (this.#selectedEditors.size === 0) {
       return;
     }
     for (const editor of this.#selectedEditors) {

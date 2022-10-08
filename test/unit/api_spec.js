@@ -15,6 +15,7 @@
 
 import {
   AnnotationMode,
+  AnnotationType,
   createPromiseCapability,
   FontType,
   ImageKind,
@@ -170,15 +171,43 @@ describe("api", function () {
       expect(true).toEqual(true);
     });
 
-    it("creates pdf doc from typed array", async function () {
+    it("creates pdf doc from TypedArray", async function () {
       const typedArrayPdf = await DefaultFileReaderFactory.fetch({
         path: TEST_PDFS_PATH + basicApiFileName,
       });
 
       // Sanity check to make sure that we fetched the entire PDF file.
+      expect(typedArrayPdf instanceof Uint8Array).toEqual(true);
       expect(typedArrayPdf.length).toEqual(basicApiFileLength);
 
       const loadingTask = getDocument(typedArrayPdf);
+      expect(loadingTask instanceof PDFDocumentLoadingTask).toEqual(true);
+
+      const progressReportedCapability = createPromiseCapability();
+      loadingTask.onProgress = function (data) {
+        progressReportedCapability.resolve(data);
+      };
+
+      const data = await Promise.all([
+        loadingTask.promise,
+        progressReportedCapability.promise,
+      ]);
+      expect(data[0] instanceof PDFDocumentProxy).toEqual(true);
+      expect(data[1].loaded / data[1].total).toEqual(1);
+
+      await loadingTask.destroy();
+    });
+
+    it("creates pdf doc from ArrayBuffer", async function () {
+      const { buffer: arrayBufferPdf } = await DefaultFileReaderFactory.fetch({
+        path: TEST_PDFS_PATH + basicApiFileName,
+      });
+
+      // Sanity check to make sure that we fetched the entire PDF file.
+      expect(arrayBufferPdf instanceof ArrayBuffer).toEqual(true);
+      expect(arrayBufferPdf.byteLength).toEqual(basicApiFileLength);
+
+      const loadingTask = getDocument(arrayBufferPdf);
       expect(loadingTask instanceof PDFDocumentLoadingTask).toEqual(true);
 
       const progressReportedCapability = createPromiseCapability();
@@ -441,7 +470,7 @@ describe("api", function () {
       }
     );
 
-    it("creates pdf doc from empty typed array", async function () {
+    it("creates pdf doc from empty TypedArray", async function () {
       const loadingTask = getDocument(new Uint8Array(0));
       expect(loadingTask instanceof PDFDocumentLoadingTask).toEqual(true);
 
@@ -501,6 +530,7 @@ describe("api", function () {
       expect(opList.fnArray.length).toEqual(0);
       expect(opList.argsArray.length).toEqual(0);
       expect(opList.lastChunk).toEqual(true);
+      expect(opList.separateAnnots).toEqual(null);
 
       await loadingTask.destroy();
     });
@@ -521,6 +551,7 @@ describe("api", function () {
       expect(opList.fnArray.length).toEqual(0);
       expect(opList.argsArray.length).toEqual(0);
       expect(opList.lastChunk).toEqual(true);
+      expect(opList.separateAnnots).toEqual(null);
 
       await loadingTask.destroy();
     });
@@ -588,6 +619,7 @@ describe("api", function () {
       expect(opList.fnArray.length).toBeGreaterThan(5);
       expect(opList.argsArray.length).toBeGreaterThan(5);
       expect(opList.lastChunk).toEqual(true);
+      expect(opList.separateAnnots).toEqual(null);
 
       try {
         await pdfDocument2.getPage(1);
@@ -631,6 +663,7 @@ describe("api", function () {
         expect(opList.fnArray.length).toBeGreaterThan(5);
         expect(opList.argsArray.length).toBeGreaterThan(5);
         expect(opList.lastChunk).toEqual(true);
+        expect(opList.separateAnnots).toEqual(null);
       }
 
       await Promise.all([loadingTask1.destroy(), loadingTask2.destroy()]);
@@ -1358,7 +1391,7 @@ describe("api", function () {
             defaultValue: "",
             multiline: false,
             password: false,
-            charLimit: null,
+            charLimit: 0,
             comb: false,
             editable: true,
             hidden: false,
@@ -1503,11 +1536,68 @@ describe("api", function () {
       expect(outline.length).toEqual(6);
 
       expect(outline[4]).toEqual({
+        action: null,
+        attachment: undefined,
         dest: "Händel -- Halle🎆lujah",
         url: null,
         unsafeUrl: undefined,
         newWindow: undefined,
+        setOCGState: undefined,
         title: "Händel -- Halle🎆lujah",
+        color: new Uint8ClampedArray([0, 0, 0]),
+        count: undefined,
+        bold: false,
+        italic: false,
+        items: [],
+      });
+
+      await loadingTask.destroy();
+    });
+
+    it("gets outline, with named-actions (issue 15367)", async function () {
+      const loadingTask = getDocument(buildGetDocumentParams("issue15367.pdf"));
+      const pdfDoc = await loadingTask.promise;
+      const outline = await pdfDoc.getOutline();
+
+      expect(Array.isArray(outline)).toEqual(true);
+      expect(outline.length).toEqual(4);
+
+      expect(outline[1]).toEqual({
+        action: "PrevPage",
+        attachment: undefined,
+        dest: null,
+        url: null,
+        unsafeUrl: undefined,
+        newWindow: undefined,
+        setOCGState: undefined,
+        title: "Previous Page",
+        color: new Uint8ClampedArray([0, 0, 0]),
+        count: undefined,
+        bold: false,
+        italic: false,
+        items: [],
+      });
+
+      await loadingTask.destroy();
+    });
+
+    it("gets outline, with SetOCGState-actions (issue 15372)", async function () {
+      const loadingTask = getDocument(buildGetDocumentParams("issue15372.pdf"));
+      const pdfDoc = await loadingTask.promise;
+      const outline = await pdfDoc.getOutline();
+
+      expect(Array.isArray(outline)).toEqual(true);
+      expect(outline.length).toEqual(1);
+
+      expect(outline[0]).toEqual({
+        action: null,
+        attachment: undefined,
+        dest: null,
+        url: null,
+        unsafeUrl: undefined,
+        newWindow: undefined,
+        setOCGState: { state: ["OFF", "ON", "50R"], preserveRB: false },
+        title: "Display Layer",
         color: new Uint8ClampedArray([0, 0, 0]),
         count: undefined,
         bold: false,
@@ -2069,6 +2159,23 @@ describe("api", function () {
       ]);
     });
 
+    it("gets annotations containing GoToE action (issue 8844)", async function () {
+      const loadingTask = getDocument(buildGetDocumentParams("issue8844.pdf"));
+      const pdfDoc = await loadingTask.promise;
+      const pdfPage = await pdfDoc.getPage(1);
+      const annotations = await pdfPage.getAnnotations();
+
+      expect(annotations.length).toEqual(1);
+      expect(annotations[0].annotationType).toEqual(AnnotationType.LINK);
+
+      const { filename, content } = annotations[0].attachment;
+      expect(filename).toEqual("man.pdf");
+      expect(content instanceof Uint8Array).toEqual(true);
+      expect(content.length).toEqual(4508);
+
+      await loadingTask.destroy();
+    });
+
     it("gets text content", async function () {
       const defaultPromise = page.getTextContent();
       const parametersPromise = page.getTextContent({
@@ -2331,6 +2438,23 @@ Caron Broadcasting, Inc., an Ohio corporation (“Lessee”).`)
       await loadingTask.destroy();
     });
 
+    // TODO: Change this to a `text` reference test instead.
+    //       Currently that doesn't work, since the `XMLSerializer` fails on
+    //       the ASCII "control characters" found in the text-content.
+    it("gets text content with non-standard ligatures (issue issue15516)", async function () {
+      const loadingTask = getDocument(
+        buildGetDocumentParams("issue15516_reduced.pdf")
+      );
+      const pdfDoc = await loadingTask.promise;
+      const pdfPage = await pdfDoc.getPage(1);
+      const { items } = await pdfPage.getTextContent();
+      const text = mergeText(items);
+
+      expect(text).toEqual("ffi fi ffl ff fl \x07 \x08 Ý");
+
+      await loadingTask.destroy();
+    });
+
     it("gets empty structure tree", async function () {
       const tree = await page.getStructTree();
 
@@ -2402,6 +2526,10 @@ Caron Broadcasting, Inc., an Ohio corporation (“Lessee”).`)
       expect(operatorList.fnArray.length).toBeGreaterThan(100);
       expect(operatorList.argsArray.length).toBeGreaterThan(100);
       expect(operatorList.lastChunk).toEqual(true);
+      expect(operatorList.separateAnnots).toEqual({
+        form: false,
+        canvas: false,
+      });
     });
 
     it("gets operatorList with JPEG image (issue 4888)", async function () {
@@ -2442,6 +2570,7 @@ Caron Broadcasting, Inc., an Ohio corporation (“Lessee”).`)
               expect(opList.fnArray.length).toBeGreaterThan(100);
               expect(opList.argsArray.length).toBeGreaterThan(100);
               expect(opList.lastChunk).toEqual(true);
+              expect(opList.separateAnnots).toEqual(null);
 
               return loadingTask1.destroy();
             });
@@ -2454,6 +2583,7 @@ Caron Broadcasting, Inc., an Ohio corporation (“Lessee”).`)
               expect(opList.fnArray.length).toEqual(0);
               expect(opList.argsArray.length).toEqual(0);
               expect(opList.lastChunk).toEqual(true);
+              expect(opList.separateAnnots).toEqual(null);
 
               return loadingTask2.destroy();
             });
@@ -2475,6 +2605,10 @@ Caron Broadcasting, Inc., an Ohio corporation (“Lessee”).`)
       expect(operatorList.fnArray.length).toBeGreaterThan(20);
       expect(operatorList.argsArray.length).toBeGreaterThan(20);
       expect(operatorList.lastChunk).toEqual(true);
+      expect(operatorList.separateAnnots).toEqual({
+        form: false,
+        canvas: false,
+      });
 
       // The `getOperatorList` method, similar to the `render` method,
       // is supposed to include any existing Annotation-operatorLists.
@@ -2498,6 +2632,7 @@ Caron Broadcasting, Inc., an Ohio corporation (“Lessee”).`)
       expect(opListAnnotDisable.fnArray.length).toEqual(0);
       expect(opListAnnotDisable.argsArray.length).toEqual(0);
       expect(opListAnnotDisable.lastChunk).toEqual(true);
+      expect(opListAnnotDisable.separateAnnots).toEqual(null);
 
       const opListAnnotEnable = await pdfPage.getOperatorList({
         annotationMode: AnnotationMode.ENABLE,
@@ -2505,6 +2640,10 @@ Caron Broadcasting, Inc., an Ohio corporation (“Lessee”).`)
       expect(opListAnnotEnable.fnArray.length).toBeGreaterThan(140);
       expect(opListAnnotEnable.argsArray.length).toBeGreaterThan(140);
       expect(opListAnnotEnable.lastChunk).toEqual(true);
+      expect(opListAnnotEnable.separateAnnots).toEqual({
+        form: false,
+        canvas: true,
+      });
 
       let firstAnnotIndex = opListAnnotEnable.fnArray.indexOf(
         OPS.beginAnnotation
@@ -2518,6 +2657,10 @@ Caron Broadcasting, Inc., an Ohio corporation (“Lessee”).`)
       expect(opListAnnotEnableForms.fnArray.length).toBeGreaterThan(30);
       expect(opListAnnotEnableForms.argsArray.length).toBeGreaterThan(30);
       expect(opListAnnotEnableForms.lastChunk).toEqual(true);
+      expect(opListAnnotEnableForms.separateAnnots).toEqual({
+        form: true,
+        canvas: true,
+      });
 
       firstAnnotIndex = opListAnnotEnableForms.fnArray.indexOf(
         OPS.beginAnnotation
@@ -2531,6 +2674,10 @@ Caron Broadcasting, Inc., an Ohio corporation (“Lessee”).`)
       expect(opListAnnotEnableStorage.fnArray.length).toBeGreaterThan(170);
       expect(opListAnnotEnableStorage.argsArray.length).toBeGreaterThan(170);
       expect(opListAnnotEnableStorage.lastChunk).toEqual(true);
+      expect(opListAnnotEnableStorage.separateAnnots).toEqual({
+        form: false,
+        canvas: true,
+      });
 
       firstAnnotIndex = opListAnnotEnableStorage.fnArray.indexOf(
         OPS.beginAnnotation
@@ -2635,8 +2782,9 @@ Caron Broadcasting, Inc., an Ohio corporation (“Lessee”).`)
       expect(renderTask instanceof RenderTask).toEqual(true);
 
       await renderTask.promise;
-      const stats = pdfPage.stats;
+      expect(renderTask.separateAnnots).toEqual(false);
 
+      const { stats } = pdfPage;
       expect(stats instanceof StatTimer).toEqual(true);
       expect(stats.times.length).toEqual(3);
 
@@ -2719,6 +2867,7 @@ Caron Broadcasting, Inc., an Ohio corporation (“Lessee”).`)
       expect(reRenderTask instanceof RenderTask).toEqual(true);
 
       await reRenderTask.promise;
+      expect(reRenderTask.separateAnnots).toEqual(false);
 
       CanvasFactory.destroy(canvasAndCtx);
     });
@@ -2785,8 +2934,9 @@ Caron Broadcasting, Inc., an Ohio corporation (“Lessee”).`)
       expect(renderTask instanceof RenderTask).toEqual(true);
 
       await renderTask.promise;
-      await pdfDoc.cleanup();
+      expect(renderTask.separateAnnots).toEqual(false);
 
+      await pdfDoc.cleanup();
       expect(true).toEqual(true);
 
       CanvasFactory.destroy(canvasAndCtx);
@@ -2831,6 +2981,7 @@ Caron Broadcasting, Inc., an Ohio corporation (“Lessee”).`)
         );
       }
       await renderTask.promise;
+      expect(renderTask.separateAnnots).toEqual(false);
 
       CanvasFactory.destroy(canvasAndCtx);
       await loadingTask.destroy();
@@ -2918,6 +3069,8 @@ Caron Broadcasting, Inc., an Ohio corporation (“Lessee”).`)
         });
 
         await renderTask.promise;
+        expect(renderTask.separateAnnots).toEqual(false);
+
         const printData = canvasAndCtx.canvas.toDataURL();
         CanvasFactory.destroy(canvasAndCtx);
 
@@ -3002,6 +3155,8 @@ Caron Broadcasting, Inc., an Ohio corporation (“Lessee”).`)
         viewport,
       });
       await renderTask.promise;
+      expect(renderTask.separateAnnots).toEqual(false);
+
       const data = canvasAndCtx.canvas.toDataURL();
       CanvasFactory.destroy(canvasAndCtx);
       return data;

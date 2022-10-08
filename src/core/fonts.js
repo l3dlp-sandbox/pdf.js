@@ -137,6 +137,9 @@ function adjustToUnicode(properties, builtInEncoding) {
   if (properties.isInternalFont) {
     return;
   }
+  if (properties.hasIncludedToUnicodeMap) {
+    return; // The font dictionary has a `ToUnicode` entry.
+  }
   if (builtInEncoding === properties.defaultEncoding) {
     return; // No point in trying to adjust `toUnicode` if the encodings match.
   }
@@ -146,11 +149,7 @@ function adjustToUnicode(properties, builtInEncoding) {
   const toUnicode = [],
     glyphsUnicodeMap = getGlyphsUnicode();
   for (const charCode in builtInEncoding) {
-    if (properties.hasIncludedToUnicodeMap) {
-      if (properties.toUnicode.has(charCode)) {
-        continue; // The font dictionary has a `ToUnicode` entry.
-      }
-    } else if (properties.hasEncoding) {
+    if (properties.hasEncoding) {
       if (
         properties.differences.length === 0 ||
         properties.differences[charCode] !== undefined
@@ -1120,17 +1119,16 @@ class Font {
       }
     }
 
-    this.bold = fontName.search(/bold/gi) !== -1;
-    this.italic =
-      fontName.search(/oblique/gi) !== -1 || fontName.search(/italic/gi) !== -1;
+    this.bold = /bold/gi.test(fontName);
+    this.italic = /oblique|italic/gi.test(fontName);
 
     // Use 'name' instead of 'fontName' here because the original
     // name ArialBlack for example will be replaced by Helvetica.
-    this.black = name.search(/Black/g) !== -1;
+    this.black = /Black/g.test(name);
 
     // Use 'name' instead of 'fontName' here because the original
     // name ArialNarrow for example will be replaced by Helvetica.
-    const isNarrow = name.search(/Narrow/g) !== -1;
+    const isNarrow = /Narrow/g.test(name);
 
     // if at least one width is present, remeasure all chars when exists
     this.remeasure =
@@ -2797,7 +2795,6 @@ class Font {
       const cmapPlatformId = cmapTable.platformId;
       const cmapEncodingId = cmapTable.encodingId;
       const cmapMappings = cmapTable.mappings;
-      const cmapMappingsLength = cmapMappings.length;
       let baseEncoding = [],
         forcePostTable = false;
       if (
@@ -2862,18 +2859,18 @@ class Font {
             }
           }
 
-          for (let i = 0; i < cmapMappingsLength; ++i) {
-            if (cmapMappings[i].charCode !== unicodeOrCharCode) {
+          for (const mapping of cmapMappings) {
+            if (mapping.charCode !== unicodeOrCharCode) {
               continue;
             }
-            charCodeToGlyphId[charCode] = cmapMappings[i].glyphId;
+            charCodeToGlyphId[charCode] = mapping.glyphId;
             break;
           }
         }
       } else if (cmapPlatformId === 0) {
         // Default Unicode semantics, use the charcodes as is.
-        for (let i = 0; i < cmapMappingsLength; ++i) {
-          charCodeToGlyphId[cmapMappings[i].charCode] = cmapMappings[i].glyphId;
+        for (const mapping of cmapMappings) {
+          charCodeToGlyphId[mapping.charCode] = mapping.glyphId;
         }
         // Always prefer the BaseEncoding/Differences arrays, when they exist
         // (fixes issue13433.pdf).
@@ -2890,8 +2887,8 @@ class Font {
         // special range since some PDFs have char codes outside of this range
         // (e.g. 0x2013) which when masked would overwrite other values in the
         // cmap.
-        for (let i = 0; i < cmapMappingsLength; ++i) {
-          let charCode = cmapMappings[i].charCode;
+        for (const mapping of cmapMappings) {
+          let charCode = mapping.charCode;
           if (
             cmapPlatformId === 3 &&
             charCode >= 0xf000 &&
@@ -2899,7 +2896,7 @@ class Font {
           ) {
             charCode &= 0xff;
           }
-          charCodeToGlyphId[charCode] = cmapMappings[i].glyphId;
+          charCodeToGlyphId[charCode] = mapping.glyphId;
         }
       }
 
@@ -3095,8 +3092,7 @@ class Font {
           // to begin with.
           continue;
         }
-        for (let i = 0, ii = charCodes.length; i < ii; i++) {
-          const charCode = charCodes[i];
+        for (const charCode of charCodes) {
           // Find a fontCharCode that maps to the base and accent glyphs.
           // If one doesn't exists, create it.
           const charCodeToGlyphId = newMapping.charCodeToGlyphId;
@@ -3214,8 +3210,7 @@ class Font {
     // trying to estimate space character width
     const possibleSpaceReplacements = ["space", "minus", "one", "i", "I"];
     let width;
-    for (let i = 0, ii = possibleSpaceReplacements.length; i < ii; i++) {
-      const glyphName = possibleSpaceReplacements[i];
+    for (const glyphName of possibleSpaceReplacements) {
       // if possible, getting width by glyph name
       if (glyphName in this.widths) {
         width = this.widths[glyphName];

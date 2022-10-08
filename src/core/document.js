@@ -13,6 +13,7 @@
  * limitations under the License.
  */
 
+import { AnnotationFactory, PopupAnnotation } from "./annotation.js";
 import {
   assert,
   FormatError,
@@ -42,7 +43,6 @@ import {
 } from "./core_utils.js";
 import { Dict, isName, Name, Ref } from "./primitives.js";
 import { getXfaFontDict, getXfaFontName } from "./xfa_fonts.js";
-import { AnnotationFactory } from "./annotation.js";
 import { BaseStream } from "./base_stream.js";
 import { calculateMD5 } from "./crypto.js";
 import { Catalog } from "./catalog.js";
@@ -455,7 +455,7 @@ class Page {
         annotations.length === 0 ||
         intent & RenderingIntentFlag.ANNOTATIONS_DISABLE
       ) {
-        pageOpList.flush(true);
+        pageOpList.flush(/* lastChunk = */ true);
         return { length: pageOpList.totalLength };
       }
       const renderForms = !!(intent & RenderingIntentFlag.ANNOTATIONS_FORMS),
@@ -493,10 +493,23 @@ class Page {
       }
 
       return Promise.all(opListPromises).then(function (opLists) {
-        for (const opList of opLists) {
+        let form = false,
+          canvas = false;
+
+        for (const { opList, separateForm, separateCanvas } of opLists) {
           pageOpList.addOpList(opList);
+
+          if (separateForm) {
+            form = separateForm;
+          }
+          if (separateCanvas) {
+            canvas = separateCanvas;
+          }
         }
-        pageOpList.flush(true);
+        pageOpList.flush(
+          /* lastChunk = */ true,
+          /* separateAnnots = */ { form, canvas }
+        );
         return { length: pageOpList.totalLength };
       });
     });
@@ -565,30 +578,56 @@ class Page {
     return tree;
   }
 
-  getAnnotationsData(intent) {
-    return this._parsedAnnotations.then(function (annotations) {
-      const annotationsData = [];
+  async getAnnotationsData(handler, task, intent) {
+    const annotations = await this._parsedAnnotations;
+    if (annotations.length === 0) {
+      return [];
+    }
 
-      if (annotations.length === 0) {
-        return annotationsData;
+    const textContentPromises = [];
+    const annotationsData = [];
+    let partialEvaluator;
+
+    const intentAny = !!(intent & RenderingIntentFlag.ANY),
+      intentDisplay = !!(intent & RenderingIntentFlag.DISPLAY),
+      intentPrint = !!(intent & RenderingIntentFlag.PRINT);
+
+    for (const annotation of annotations) {
+      // Get the annotation even if it's hidden because
+      // JS can change its display.
+      const isVisible = intentAny || (intentDisplay && annotation.viewable);
+      if (isVisible || (intentPrint && annotation.printable)) {
+        annotationsData.push(annotation.data);
       }
-      const intentAny = !!(intent & RenderingIntentFlag.ANY),
-        intentDisplay = !!(intent & RenderingIntentFlag.DISPLAY),
-        intentPrint = !!(intent & RenderingIntentFlag.PRINT);
 
-      for (const annotation of annotations) {
-        // Get the annotation even if it's hidden because
-        // JS can change its display.
-        if (
-          intentAny ||
-          (intentDisplay && annotation.viewable) ||
-          (intentPrint && annotation.printable)
-        ) {
-          annotationsData.push(annotation.data);
+      if (annotation.hasTextContent && isVisible) {
+        if (!partialEvaluator) {
+          partialEvaluator = new PartialEvaluator({
+            xref: this.xref,
+            handler,
+            pageIndex: this.pageIndex,
+            idFactory: this._localIdFactory,
+            fontCache: this.fontCache,
+            builtInCMapCache: this.builtInCMapCache,
+            standardFontDataCache: this.standardFontDataCache,
+            globalImageCache: this.globalImageCache,
+            options: this.evaluatorOptions,
+          });
         }
+        textContentPromises.push(
+          annotation
+            .extractTextContent(partialEvaluator, task, this.view)
+            .catch(function (reason) {
+              warn(
+                `getAnnotationsData - ignoring textContent during "${task.name}" task: "${reason}".`
+              );
+            })
+        );
       }
-      return annotationsData;
-    });
+    }
+
+    await Promise.all(textContentPromises);
+    return annotationsData;
   }
 
   get annotations() {
@@ -617,7 +656,32 @@ class Page {
         }
 
         return Promise.all(annotationPromises).then(function (annotations) {
-          return annotations.filter(annotation => !!annotation);
+          if (annotations.length === 0) {
+            return annotations;
+          }
+
+          const sortedAnnotations = [];
+          let popupAnnotations;
+          // Ensure that PopupAnnotations are handled last, since they depend on
+          // their parent Annotation in the display layer; fixes issue 11362.
+          for (const annotation of annotations) {
+            if (!annotation) {
+              continue;
+            }
+            if (annotation instanceof PopupAnnotation) {
+              if (!popupAnnotations) {
+                popupAnnotations = [];
+              }
+              popupAnnotations.push(annotation);
+              continue;
+            }
+            sortedAnnotations.push(annotation);
+          }
+          if (popupAnnotations) {
+            sortedAnnotations.push(...popupAnnotations);
+          }
+
+          return sortedAnnotations;
         });
       });
 
@@ -1343,8 +1407,8 @@ class PDFDocument {
 
     function hexString(hash) {
       const buf = [];
-      for (let i = 0, ii = hash.length; i < ii; i++) {
-        const hex = hash[i].toString(16);
+      for (const num of hash) {
+        const hex = num.toString(16);
         buf.push(hex.padStart(2, "0"));
       }
       return buf.join("");

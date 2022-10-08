@@ -13,7 +13,15 @@
  * limitations under the License.
  */
 
-import "./compatibility.js";
+// Skip compatibility checks for modern builds and if we already ran the module.
+if (
+  typeof PDFJSDev !== "undefined" &&
+  !PDFJSDev.test("SKIP_BABEL") &&
+  !globalThis._pdfjsCompatibilityChecked
+) {
+  globalThis._pdfjsCompatibilityChecked = true;
+  require("./compatibility.js");
+}
 
 const IDENTITY_MATRIX = [1, 0, 0, 1, 0, 0];
 const FONT_IDENTITY_MATRIX = [0.001, 0, 0, 0.001, 0, 0];
@@ -846,20 +854,6 @@ class Util {
       m[0] / d,
       (m[2] * m[5] - m[4] * m[3]) / d,
       (m[4] * m[1] - m[5] * m[0]) / d,
-    ];
-  }
-
-  // Apply a generic 3d matrix M on a 3-vector v:
-  //   | a b c |   | X |
-  //   | d e f | x | Y |
-  //   | g h i |   | Z |
-  // M is assumed to be serialized as [a,b,c,d,e,f,g,h,i],
-  // with v as [X,Y,Z]
-  static apply3dTransform(m, v) {
-    return [
-      m[0] * v[0] + m[1] * v[1] + m[2] * v[2],
-      m[3] * v[0] + m[4] * v[1] + m[5] * v[2],
-      m[6] * v[0] + m[7] * v[1] + m[8] * v[2],
     ];
   }
 

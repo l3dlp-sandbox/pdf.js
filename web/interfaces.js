@@ -29,6 +29,8 @@
 /** @typedef {import("./text_layer_builder").TextLayerBuilder} TextLayerBuilder */
 /** @typedef {import("./ui_utils").RenderingStates} RenderingStates */
 /** @typedef {import("./xfa_layer_builder").XfaLayerBuilder} XfaLayerBuilder */
+// eslint-disable-next-line max-len
+/** @typedef {import("./text_accessibility.js").TextAccessibilityManager} TextAccessibilityManager */
 
 /**
  * @interface
@@ -109,6 +111,11 @@ class IPDFLinkService {
   executeNamedAction(action) {}
 
   /**
+   * @param {Object} action
+   */
+  executeSetOCGState(action) {}
+
+  /**
    * @param {number} pageNum - page number.
    * @param {Object} pageRef - reference to the page.
    */
@@ -159,9 +166,9 @@ class IPDFTextLayerFactory {
    * @property {HTMLDivElement} textLayerDiv
    * @property {number} pageIndex
    * @property {PageViewport} viewport
-   * @property {boolean} [enhanceTextSelection]
    * @property {EventBus} eventBus
    * @property {TextHighlighter} highlighter
+   * @property {TextAccessibilityManager} [accessibilityManager]
    */
 
   /**
@@ -172,9 +179,9 @@ class IPDFTextLayerFactory {
     textLayerDiv,
     pageIndex,
     viewport,
-    enhanceTextSelection = false,
     eventBus,
     highlighter,
+    accessibilityManager,
   }) {}
 }
 
@@ -199,6 +206,7 @@ class IPDFAnnotationLayerFactory {
    *   [fieldObjectsPromise]
    * @property {Map<string, HTMLCanvasElement>} [annotationCanvasMap] - Map some
    *   annotation ids with canvases used to render them.
+   * @property {TextAccessibilityManager} [accessibilityManager]
    */
 
   /**
@@ -217,6 +225,7 @@ class IPDFAnnotationLayerFactory {
     mouseState = null,
     fieldObjectsPromise = null,
     annotationCanvasMap = null,
+    accessibilityManager = null,
   }) {}
 }
 
@@ -231,6 +240,7 @@ class IPDFAnnotationEditorLayerFactory {
    * @property {PDFPageProxy} pdfPage
    * @property {IL10n} l10n
    * @property {AnnotationStorage} [annotationStorage] - Storage for annotation
+   * @property {TextAccessibilityManager} [accessibilityManager]
    *   data in forms.
    */
 
@@ -244,6 +254,7 @@ class IPDFAnnotationEditorLayerFactory {
     pdfPage,
     l10n,
     annotationStorage = null,
+    accessibilityManager,
   }) {}
 }
 

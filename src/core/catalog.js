@@ -302,11 +302,12 @@ class Catalog {
         throw new FormatError("Invalid outline item encountered.");
       }
 
-      const data = { url: null, dest: null };
+      const data = { url: null, dest: null, action: null };
       Catalog.parseDestDictionary({
         destDict: outlineDict,
         resultObj: data,
         docBaseUrl: this.pdfManager.docBaseUrl,
+        docAttachments: this.attachments,
       });
       const title = outlineDict.get("Title");
       const flags = outlineDict.get("F") || 0;
@@ -324,10 +325,13 @@ class Catalog {
       }
 
       const outlineItem = {
+        action: data.action,
+        attachment: data.attachment,
         dest: data.dest,
         url: data.url,
         unsafeUrl: data.unsafeUrl,
         newWindow: data.newWindow,
+        setOCGState: data.setOCGState,
         title: stringToPDFString(title),
         color: rgbColor,
         count: Number.isInteger(count) ? count : undefined,
@@ -1341,8 +1345,7 @@ class Catalog {
 
           const kidPromises = [];
           let found = false;
-          for (let i = 0, ii = kids.length; i < ii; i++) {
-            const kid = kids[i];
+          for (const kid of kids) {
             if (!(kid instanceof Ref)) {
               throw new FormatError("Kid must be a reference.");
             }
@@ -1411,6 +1414,8 @@ class Catalog {
    *   properties will be placed.
    * @property {string} [docBaseUrl] - The document base URL that is used when
    *   attempting to recover valid absolute URLs from relative ones.
+   * @property {Object} [docAttachments] - The document attachments (may not
+   *   exist in most PDF documents).
    */
 
   /**
@@ -1429,6 +1434,7 @@ class Catalog {
       return;
     }
     const docBaseUrl = params.docBaseUrl || null;
+    const docAttachments = params.docAttachments || null;
 
     let action = destDict.get("A"),
       url,
@@ -1525,11 +1531,63 @@ class Catalog {
           }
           break;
 
+        case "GoToE":
+          const target = action.get("T");
+          let attachment;
+
+          if (docAttachments && target instanceof Dict) {
+            const relationship = target.get("R");
+            const name = target.get("N");
+
+            if (isName(relationship, "C") && typeof name === "string") {
+              attachment = docAttachments[stringToPDFString(name)];
+            }
+          }
+
+          if (attachment) {
+            resultObj.attachment = attachment;
+          } else {
+            warn(`parseDestDictionary - unimplemented "GoToE" action.`);
+          }
+          break;
+
         case "Named":
           const namedAction = action.get("N");
           if (namedAction instanceof Name) {
             resultObj.action = namedAction.name;
           }
+          break;
+
+        case "SetOCGState":
+          const state = action.get("State");
+          const preserveRB = action.get("PreserveRB");
+
+          if (!Array.isArray(state) || state.length === 0) {
+            break;
+          }
+          const stateArr = [];
+
+          for (const elem of state) {
+            if (elem instanceof Name) {
+              switch (elem.name) {
+                case "ON":
+                case "OFF":
+                case "Toggle":
+                  stateArr.push(elem.name);
+                  break;
+              }
+            } else if (elem instanceof Ref) {
+              stateArr.push(elem.toString());
+            }
+          }
+
+          if (stateArr.length !== state.length) {
+            break; // Some of the original entries are not valid.
+          }
+          resultObj.setOCGState = {
+            state: stateArr,
+            preserveRB: typeof preserveRB === "boolean" ? preserveRB : true,
+          };
           break;
 
         case "JavaScript":

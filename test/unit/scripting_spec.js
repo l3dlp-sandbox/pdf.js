@@ -608,14 +608,23 @@ describe("Scripting", function () {
       it("should parse a date with a format", async () => {
         const check = async (date, format, expected) => {
           const value = await myeval(
-            `AFParseDateEx("${date}", "${format}").toISOString()`
+            `AFParseDateEx("${date}", "${format}").toISOString().replace(/T.*$/, "")`
           );
-          expect(value).toEqual(new Date(expected).toISOString());
+          expect(value).toEqual(
+            new Date(expected).toISOString().replace(/T.*$/, "")
+          );
         };
 
         await check("05", "dd", "2000/01/05");
         await check("12", "mm", "2000/12/01");
         await check("2022", "yyyy", "2022/01/01");
+        await check("a1$9bbbb21", "dd/mm/yyyy", "2021/09/01");
+
+        // The following test isn't working as expected because
+        // the quickjs date parser has been replaced by the browser one
+        // and the date "1.9.2021" is valid in Chrome but not in Firefox.
+        // The supported date format is not specified...
+        // await check("1.9.2021", "dd/mm/yyyy", "2021/09/01");
       });
     });
 
@@ -1026,7 +1035,7 @@ describe("Scripting", function () {
       });
     });
 
-    describe("ASSimple_Calculate", function () {
+    describe("AFSimple_Calculate", function () {
       it("should compute the sum of several fields", async () => {
         const refIds = [0, 1, 2, 3].map(_ => getId());
         const data = {
@@ -1061,7 +1070,7 @@ describe("Scripting", function () {
                 value: "",
                 actions: {
                   Calculate: [
-                    `AFSimple_Calculate("SUM", ["field1", "field2", "field3"]);`,
+                    `AFSimple_Calculate("SUM", ["field1", "field2", "field3", "unknown"]);`,
                   ],
                 },
                 type: "text",
@@ -1418,6 +1427,22 @@ describe("Scripting", function () {
 
         value = await myeval(`eMailValidate("foo bar")`);
         expect(value).toEqual(false);
+      });
+    });
+
+    describe("AFExactMatch", function () {
+      it("should check matching between regexs and a string", async () => {
+        let value = await myeval(`AFExactMatch(/\\d+/, "123")`);
+        expect(value).toEqual(true);
+
+        value = await myeval(`AFExactMatch(/\\d+/, "foo")`);
+        expect(value).toEqual(0);
+
+        value = await myeval(`AFExactMatch([/\\d+/, /[fo]*/], "foo")`);
+        expect(value).toEqual(2);
+
+        value = await myeval(`AFExactMatch([/\\d+/, /[fo]*/], "bar")`);
+        expect(value).toEqual(0);
       });
     });
   });

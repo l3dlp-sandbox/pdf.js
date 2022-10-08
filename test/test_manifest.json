@@ -53,13 +53,6 @@
        "rounds": 1,
        "type": "text"
     },
-    {  "id": "tracemonkey-text-enhance",
-       "file": "pdfs/tracemonkey.pdf",
-       "md5": "9a192d8b1a7dc652a19835f6f08098bd",
-       "rounds": 1,
-       "enhance": true,
-       "type": "text"
-    },
     {  "id": "tracemonkey-forced-colors-eq",
       "file": "pdfs/tracemonkey.pdf",
       "md5": "9a192d8b1a7dc652a19835f6f08098bd",
@@ -155,6 +148,14 @@
     {  "id": "issue15220",
        "file": "pdfs/issue15220.pdf",
        "md5": "0864a9e3860c0cb5e98b5eb23287fba4",
+       "rounds": 1,
+       "link": true,
+       "lastPage": 1,
+       "type": "eq"
+    },
+    {  "id": "issue15292",
+       "file": "pdfs/issue15292.pdf",
+       "md5": "24297e183bf16cdd684dac8902e9fbe6",
        "rounds": 1,
        "link": true,
        "lastPage": 1,
@@ -440,6 +441,12 @@
        "rounds": 1,
        "type": "eq"
     },
+    {  "id": "issue15441",
+       "file": "pdfs/issue15441.pdf",
+       "md5": "4a30ea4c8d32fc7dee2a26f78b24966e",
+       "rounds": 1,
+       "type": "eq"
+    },
     {  "id": "bug1027533",
        "file": "pdfs/bug1027533.pdf",
        "md5": "07235b2bb0e03f8d727072d48fae3b0a",
@@ -596,26 +603,10 @@
        "lastPage": 4,
        "type": "text"
     },
-    {  "id": "taro-text-enhance",
-       "file": "pdfs/TaroUTR50SortedList112.pdf",
-       "md5": "ce63eab622ff473a43f8a8de85ef8a46",
-       "link":true,
-       "rounds": 1,
-       "lastPage": 4,
-       "enhance": true,
-       "type": "text"
-    },
     {  "id": "rotated-text",
        "file": "pdfs/rotated.pdf",
        "md5": "aed187f53e969ccdcbab0bb4c59f9e46",
        "rounds": 1,
-       "type": "text"
-    },
-    {  "id": "rotated-text-enhance",
-       "file": "pdfs/rotated.pdf",
-       "md5": "aed187f53e969ccdcbab0bb4c59f9e46",
-       "rounds": 1,
-       "enhance": true,
        "type": "text"
     },
     {
@@ -1836,6 +1827,12 @@
        "link": false,
        "type": "eq"
     },
+    {  "id": "issue15443",
+       "file": "pdfs/issue15443.pdf",
+       "md5": "95a9e28b3f2754aa310f3379e01d781d",
+       "rounds": 1,
+       "type": "eq"
+    },
     {  "id": "issue5946",
        "file": "pdfs/issue5946.pdf",
        "md5": "1217a3c8e2ee4ceb96d85a2f27e437b4",
@@ -2708,6 +2705,13 @@
        "lastPage": 33,
        "type": "eq"
     },
+    {  "id": "issue15262",
+       "file": "pdfs/issue15262.pdf",
+       "md5": "f33f73848cea3c7034457653d5cfb9be",
+       "rounds": 1,
+       "type": "eq",
+       "forms": true
+    },
     {  "id": "smaskdim",
       "file": "pdfs/smaskdim.pdf",
       "md5": "de80aeca7cbf79940189fd34d59671ee",
@@ -2874,6 +2878,14 @@
        "md5": "1a0604b1a7a3aaf2162b425a9a84230b",
        "rounds": 1,
        "link": false,
+       "type": "text"
+    },
+    {  "id": "issue15352",
+       "file": "pdfs/issue15352.pdf",
+       "md5": "d0edf452a85821acf41cbfa0a6f2f2ac",
+       "rounds": 1,
+       "link": true,
+       "lastPage": 1,
        "type": "text"
     },
     {  "id": "issue6962",
@@ -5154,6 +5166,14 @@
        "lastPage": 1,
        "type": "eq"
     },
+    {  "id": "issue15492",
+       "file": "pdfs/issue15492.pdf",
+       "md5": "968d36ef340852a4c0e6fa22ced96798",
+       "rounds": 1,
+       "link": true,
+       "lastPage": 1,
+       "type": "eq"
+    },
     {  "id": "issue9650",
        "file": "pdfs/issue9650.pdf",
        "md5": "20d50bda6b1080b6d9088811299c791e",
@@ -6875,5 +6895,21 @@
    "md5": "8505033d63625dfd77e90a3722b0c316",
    "rounds": 1,
    "type": "eq"
+   },
+   {  "id": "issue15289",
+      "file": "pdfs/issue15289.pdf",
+      "md5": "f3d20aee398e052ac3dce7cc030f50de",
+      "link": true,
+      "rounds": 1,
+      "firstPage": 1,
+      "lastPage": 1,
+      "type": "eq"
+   },
+   {  "id": "bug1791583",
+      "file": "pdfs/bug1791583.pdf",
+      "md5": "1ff6badc865c9a5e9a0dc0b7131ffe28",
+      "link": true,
+      "rounds": 1,
+      "type": "eq"
    }
 ]

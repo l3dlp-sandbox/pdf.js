@@ -20,8 +20,9 @@ import { SidebarView } from "./ui_utils.js";
 /**
  * @typedef {Object} PDFOutlineViewerOptions
  * @property {HTMLDivElement} container - The viewer element.
- * @property {IPDFLinkService} linkService - The navigation/linking service.
  * @property {EventBus} eventBus - The application event bus.
+ * @property {IPDFLinkService} linkService - The navigation/linking service.
+ * @property {DownloadManager} downloadManager - The download manager.
  */
 
 /**
@@ -37,6 +38,7 @@ class PDFOutlineViewer extends BaseTreeViewer {
   constructor(options) {
     super(options);
     this.linkService = options.linkService;
+    this.downloadManager = options.downloadManager;
 
     this.eventBus._on("toggleoutlinetree", this._toggleAllTreeItems.bind(this));
     this.eventBus._on(
@@ -109,11 +111,42 @@ class PDFOutlineViewer extends BaseTreeViewer {
   /**
    * @private
    */
-  _bindLink(element, { url, newWindow, dest }) {
+  _bindLink(
+    element,
+    { url, newWindow, action, attachment, dest, setOCGState }
+  ) {
     const { linkService } = this;
 
     if (url) {
       linkService.addLinkAttributes(element, url, newWindow);
+      return;
+    }
+    if (action) {
+      element.href = linkService.getAnchorUrl("");
+      element.onclick = () => {
+        linkService.executeNamedAction(action);
+        return false;
+      };
+      return;
+    }
+    if (attachment) {
+      element.href = linkService.getAnchorUrl("");
+      element.onclick = () => {
+        this.downloadManager.openOrDownloadData(
+          element,
+          attachment.content,
+          attachment.filename
+        );
+        return false;
+      };
+      return;
+    }
+    if (setOCGState) {
+      element.href = linkService.getAnchorUrl("");
+      element.onclick = () => {
+        linkService.executeSetOCGState(setOCGState);
+        return false;
+      };
       return;
     }
 

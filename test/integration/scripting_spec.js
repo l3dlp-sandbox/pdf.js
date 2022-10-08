@@ -51,6 +51,7 @@ describe("Interaction", () => {
           await page.waitForFunction(
             "window.PDFViewerApplication.scriptingReady === true"
           );
+          await page.waitForFunction(`window.document.activeElement !== null`);
 
           // The document has an open action in order to give the focus to 401R.
           const id = await page.evaluate(() => {
@@ -1488,6 +1489,67 @@ describe("Interaction", () => {
 
           total = await page.$eval(getSelector("46R"), el => el.value);
           expect(total).withContext(`In ${browserName}`).toEqual("579.00");
+        })
+      );
+    });
+  });
+
+  describe("in bug1782564.pdf", () => {
+    let pages;
+
+    beforeAll(async () => {
+      pages = await loadAndWait("bug1782564.pdf", getSelector("7R"));
+    });
+
+    afterAll(async () => {
+      await closePages(pages);
+    });
+
+    it("must check that charLimit is correctly set", async () => {
+      await Promise.all(
+        pages.map(async ([browserName, page]) => {
+          await page.waitForFunction(
+            "window.PDFViewerApplication.scriptingReady === true"
+          );
+
+          await clearInput(page, getSelector("7R"));
+          // By default the charLimit is 0 which means that the input
+          // length is unlimited.
+          await page.type(getSelector("7R"), "abcdefghijklmnopq", {
+            delay: 10,
+          });
+
+          let value = await page.$eval(getSelector("7R"), el => el.value);
+          expect(value)
+            .withContext(`In ${browserName}`)
+            .toEqual("abcdefghijklmnopq");
+
+          // charLimit is set to 1
+          await page.click(getSelector("9R"));
+
+          await page.waitForFunction(
+            `document.querySelector('${getSelector(
+              "7R"
+            )}').value !== "abcdefgh"`
+          );
+
+          value = await page.$eval(getSelector("7R"), el => el.value);
+          expect(value).withContext(`In ${browserName}`).toEqual("a");
+
+          await clearInput(page, getSelector("7R"));
+          await page.type(getSelector("7R"), "xyz", { delay: 10 });
+
+          value = await page.$eval(getSelector("7R"), el => el.value);
+          expect(value).withContext(`In ${browserName}`).toEqual("x");
+
+          // charLimit is set to 2
+          await page.click(getSelector("9R"));
+
+          await clearInput(page, getSelector("7R"));
+          await page.type(getSelector("7R"), "xyz", { delay: 10 });
+
+          value = await page.$eval(getSelector("7R"), el => el.value);
+          expect(value).withContext(`In ${browserName}`).toEqual("xy");
         })
       );
     });

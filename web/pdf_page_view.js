@@ -51,32 +51,32 @@ import {
 } from "./ui_utils.js";
 import { compatibilityParams } from "./app_options.js";
 import { NullL10n } from "./l10n_utils.js";
+import { TextAccessibilityManager } from "./text_accessibility.js";
 
 /**
  * @typedef {Object} PDFPageViewOptions
  * @property {HTMLDivElement} [container] - The viewer element.
  * @property {EventBus} eventBus - The application event bus.
  * @property {number} id - The page unique ID (normally its number).
- * @property {number} scale - The page scale display.
+ * @property {number} [scale] - The page scale display.
  * @property {PageViewport} defaultViewport - The page viewport.
  * @property {Promise<OptionalContentConfig>} [optionalContentConfigPromise] -
  *   A promise that is resolved with an {@link OptionalContentConfig} instance.
  *   The default value is `null`.
- * @property {PDFRenderingQueue} renderingQueue - The rendering queue object.
- * @property {IPDFTextLayerFactory} textLayerFactory
+ * @property {PDFRenderingQueue} [renderingQueue] - The rendering queue object.
+ * @property {IPDFTextLayerFactory} [textLayerFactory]
  * @property {number} [textLayerMode] - Controls if the text layer used for
- *   selection and searching is created, and if the improved text selection
- *   behaviour is enabled. The constants from {TextLayerMode} should be used.
- *   The default value is `TextLayerMode.ENABLE`.
+ *   selection and searching is created. The constants from {TextLayerMode}
+ *   should be used. The default value is `TextLayerMode.ENABLE`.
  * @property {number} [annotationMode] - Controls if the annotation layer is
  *   created, and if interactive form elements or `AnnotationStorage`-data are
  *   being rendered. The constants from {@link AnnotationMode} should be used;
  *   see also {@link RenderParameters} and {@link GetOperatorListParameters}.
  *   The default value is `AnnotationMode.ENABLE_FORMS`.
- * @property {IPDFAnnotationLayerFactory} annotationLayerFactory
- * @property {IPDFAnnotationEditorLayerFactory} annotationEditorLayerFactory
- * @property {IPDFXfaLayerFactory} xfaLayerFactory
- * @property {IPDFStructTreeLayerFactory} structTreeLayerFactory
+ * @property {IPDFAnnotationLayerFactory} [annotationLayerFactory]
+ * @property {IPDFAnnotationEditorLayerFactory} [annotationEditorLayerFactory]
+ * @property {IPDFXfaLayerFactory} [xfaLayerFactory]
+ * @property {IPDFStructTreeLayerFactory} [structTreeLayerFactory]
  * @property {Object} [textHighlighterFactory]
  * @property {string} [imageResourcesPath] - Path for image resources, mainly
  *   for annotation icons. Include trailing slash.
@@ -88,7 +88,7 @@ import { NullL10n } from "./l10n_utils.js";
  * @property {Object} [pageColors] - Overwrites background and foreground colors
  *   with user defined ones in order to improve readability in high contrast
  *   mode.
- * @property {IL10n} l10n - Localization service.
+ * @property {IL10n} [l10n] - Localization service.
  */
 
 const MAX_CANVAS_PIXELS = compatibilityParams.maxCanvasPixels || 16777216;
@@ -99,7 +99,10 @@ const MAX_CANVAS_PIXELS = compatibilityParams.maxCanvasPixels || 16777216;
 class PDFPageView {
   #annotationMode = AnnotationMode.ENABLE_FORMS;
 
-  #useThumbnailCanvas = true;
+  #useThumbnailCanvas = {
+    initialOptionalContent: true,
+    regularAnnotations: true,
+  };
 
   /**
    * @param {PDFPageViewOptions} options
@@ -190,14 +193,15 @@ class PDFPageView {
       const { optionalContentConfigPromise } = options;
       if (optionalContentConfigPromise) {
         // Ensure that the thumbnails always display the *initial* document
-        // state.
+        // state, for documents with optional content.
         optionalContentConfigPromise.then(optionalContentConfig => {
           if (
             optionalContentConfigPromise !== this._optionalContentConfigPromise
           ) {
             return;
           }
-          this.#useThumbnailCanvas = optionalContentConfig.hasInitialVisibility;
+          this.#useThumbnailCanvas.initialOptionalContent =
+            optionalContentConfig.hasInitialVisibility;
         });
       }
     }
@@ -217,9 +221,7 @@ class PDFPageView {
 
   destroy() {
     this.reset();
-    if (this.pdfPage) {
-      this.pdfPage.cleanup();
-    }
+    this.pdfPage?.cleanup();
   }
 
   /**
@@ -230,6 +232,7 @@ class PDFPageView {
     try {
       await this.annotationLayer.render(this.viewport, "display");
     } catch (ex) {
+      console.error(`_renderAnnotationLayer: "${ex}".`);
       error = ex;
     } finally {
       this.eventBus.dispatch("annotationlayerrendered", {
@@ -248,6 +251,7 @@ class PDFPageView {
     try {
       await this.annotationEditorLayer.render(this.viewport, "display");
     } catch (ex) {
+      console.error(`_renderAnnotationEditorLayer: "${ex}".`);
       error = ex;
     } finally {
       this.eventBus.dispatch("annotationeditorlayerrendered", {
@@ -265,10 +269,11 @@ class PDFPageView {
     let error = null;
     try {
       const result = await this.xfaLayer.render(this.viewport, "display");
-      if (this.textHighlighter) {
+      if (result?.textDivs && this.textHighlighter) {
         this._buildXfaTextContentItems(result.textDivs);
       }
     } catch (ex) {
+      console.error(`_renderXfaLayer: "${ex}".`);
       error = ex;
     } finally {
       this.eventBus.dispatch("xfalayerrendered", {
@@ -408,14 +413,16 @@ class PDFPageView {
     if (optionalContentConfigPromise instanceof Promise) {
       this._optionalContentConfigPromise = optionalContentConfigPromise;
 
-      // Ensure that the thumbnails always display the *initial* document state.
+      // Ensure that the thumbnails always display the *initial* document state,
+      // for documents with optional content.
       optionalContentConfigPromise.then(optionalContentConfig => {
         if (
           optionalContentConfigPromise !== this._optionalContentConfigPromise
         ) {
           return;
         }
-        this.#useThumbnailCanvas = optionalContentConfig.hasInitialVisibility;
+        this.#useThumbnailCanvas.initialOptionalContent =
+          optionalContentConfig.hasInitialVisibility;
       });
     }
 
@@ -691,6 +698,7 @@ class PDFPageView {
 
     let textLayer = null;
     if (this.textLayerMode !== TextLayerMode.DISABLE && this.textLayerFactory) {
+      this._accessibilityManager ||= new TextAccessibilityManager();
       const textLayerDiv = document.createElement("div");
       textLayerDiv.className = "textLayer";
       textLayerDiv.style.width = canvasWrapper.style.width;
@@ -706,10 +714,9 @@ class PDFPageView {
         textLayerDiv,
         pageIndex: this.id - 1,
         viewport: this.viewport,
-        enhanceTextSelection:
-          this.textLayerMode === TextLayerMode.ENABLE_ENHANCE,
         eventBus: this.eventBus,
         highlighter: this.textHighlighter,
+        accessibilityManager: this._accessibilityManager,
       });
     }
     this.textLayer = textLayer;
@@ -727,6 +734,7 @@ class PDFPageView {
           renderForms: this.#annotationMode === AnnotationMode.ENABLE_FORMS,
           l10n: this.l10n,
           annotationCanvasMap: this._annotationCanvasMap,
+          accessibilityManager: this._accessibilityManager,
         });
     }
 
@@ -772,6 +780,10 @@ class PDFPageView {
       }
       this._resetZoomLayer(/* removeFromDOM = */ true);
 
+      // Ensure that the thumbnails won't become partially (or fully) blank,
+      // for documents that contain interactive form elements.
+      this.#useThumbnailCanvas.regularAnnotations = !paintTask.separateAnnots;
+
       this.eventBus.dispatch("pagerendered", {
         source: this,
         pageNumber: this.id,
@@ -814,6 +826,7 @@ class PDFPageView {
                       pageDiv: div,
                       pdfPage,
                       l10n: this.l10n,
+                      accessibilityManager: this._accessibilityManager,
                     }
                   );
                 this._renderAnnotationEditorLayer();
@@ -828,12 +841,10 @@ class PDFPageView {
     );
 
     if (this.xfaLayerFactory) {
-      if (!this.xfaLayer) {
-        this.xfaLayer = this.xfaLayerFactory.createXfaLayerBuilder({
-          pageDiv: div,
-          pdfPage,
-        });
-      }
+      this.xfaLayer ||= this.xfaLayerFactory.createXfaLayerBuilder({
+        pageDiv: div,
+        pdfPage,
+      });
       this._renderXfaLayer();
     }
 
@@ -887,6 +898,9 @@ class PDFPageView {
       },
       cancel() {
         renderTask.cancel();
+      },
+      get separateAnnots() {
+        return renderTask.separateAnnots;
       },
     };
 
@@ -1029,6 +1043,9 @@ class PDFPageView {
       cancel() {
         cancelled = true;
       },
+      get separateAnnots() {
+        return false;
+      },
     };
   }
 
@@ -1050,7 +1067,9 @@ class PDFPageView {
    * @ignore
    */
   get thumbnailCanvas() {
-    return this.#useThumbnailCanvas ? this.canvas : null;
+    const { initialOptionalContent, regularAnnotations } =
+      this.#useThumbnailCanvas;
+    return initialOptionalContent && regularAnnotations ? this.canvas : null;
   }
 }
 

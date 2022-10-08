@@ -80,15 +80,19 @@ class AnnotationFactory {
       // Only necessary to prevent the `pdfManager.docBaseUrl`-getter, used
       // with certain Annotations, from throwing and thus breaking parsing:
       pdfManager.ensureCatalog("baseUrl"),
+      // Only necessary in the `Catalog.parseDestDictionary`-method,
+      // when parsing "GoToE" actions:
+      pdfManager.ensureCatalog("attachments"),
       pdfManager.ensureDoc("xfaDatasets"),
       collectFields ? this._getPageIndex(xref, ref, pdfManager) : -1,
-    ]).then(([acroForm, baseUrl, xfaDatasets, pageIndex]) =>
+    ]).then(([acroForm, baseUrl, attachments, xfaDatasets, pageIndex]) =>
       pdfManager.ensure(this, "_create", [
         xref,
         ref,
         pdfManager,
         idFactory,
         acroForm,
+        attachments,
         xfaDatasets,
         collectFields,
         pageIndex,
@@ -105,6 +109,7 @@ class AnnotationFactory {
     pdfManager,
     idFactory,
     acroForm,
+    attachments = null,
     xfaDatasets,
     collectFields,
     pageIndex = -1
@@ -130,6 +135,7 @@ class AnnotationFactory {
       id,
       pdfManager,
       acroForm: acroForm instanceof Dict ? acroForm : Dict.empty,
+      attachments,
       xfaDatasets,
       collectFields,
       pageIndex,
@@ -881,7 +887,11 @@ class Annotation {
     );
     if (!appearance) {
       if (!isUsingOwnCanvas) {
-        return new OperatorList();
+        return {
+          opList: new OperatorList(),
+          separateForm: false,
+          separateCanvas: false,
+        };
       }
       appearance = new StringStream("");
       appearance.dict = new Dict();
@@ -930,11 +940,62 @@ class Annotation {
       opList.addOp(OPS.endMarkedContent, []);
     }
     this.reset();
-    return opList;
+    return { opList, separateForm: false, separateCanvas: isUsingOwnCanvas };
   }
 
   async save(evaluator, task, annotationStorage) {
     return null;
+  }
+
+  get hasTextContent() {
+    return false;
+  }
+
+  async extractTextContent(evaluator, task, viewBox) {
+    if (!this.appearance) {
+      return;
+    }
+
+    const resources = await this.loadResources(
+      ["ExtGState", "Font", "Properties", "XObject"],
+      this.appearance
+    );
+
+    const text = [];
+    const buffer = [];
+    const sink = {
+      desiredSize: Math.Infinity,
+      ready: true,
+
+      enqueue(chunk, size) {
+        for (const item of chunk.items) {
+          buffer.push(item.str);
+          if (item.hasEOL) {
+            text.push(buffer.join(""));
+            buffer.length = 0;
+          }
+        }
+      },
+    };
+
+    await evaluator.getTextContent({
+      stream: this.appearance,
+      task,
+      resources,
+      includeMarkedContent: true,
+      combineTextItems: true,
+      sink,
+      viewBox,
+    });
+    this.reset();
+
+    if (buffer.length) {
+      text.push(buffer.join(""));
+    }
+
+    if (text.length > 0) {
+      this.data.textContent = text;
+    }
   }
 
   /**
@@ -1619,7 +1680,11 @@ class WidgetAnnotation extends Annotation {
     // Do not render form elements on the canvas when interactive forms are
     // enabled. The display layer is responsible for rendering them instead.
     if (renderForms && !(this instanceof SignatureWidgetAnnotation)) {
-      return new OperatorList();
+      return {
+        opList: new OperatorList(),
+        separateForm: true,
+        separateCanvas: false,
+      };
     }
 
     if (!this._hasText) {
@@ -1647,12 +1712,12 @@ class WidgetAnnotation extends Annotation {
       );
     }
 
-    const operatorList = new OperatorList();
+    const opList = new OperatorList();
 
     // Even if there is an appearance stream, ignore it. This is the
     // behaviour used by Adobe Reader.
     if (!this._defaultAppearance || content === null) {
-      return operatorList;
+      return { opList, separateForm: false, separateCanvas: false };
     }
 
     const matrix = [1, 0, 0, 1, 0, 0];
@@ -1672,10 +1737,10 @@ class WidgetAnnotation extends Annotation {
       );
     }
     if (optionalContent !== undefined) {
-      operatorList.addOp(OPS.beginMarkedContentProps, ["OC", optionalContent]);
+      opList.addOp(OPS.beginMarkedContentProps, ["OC", optionalContent]);
     }
 
-    operatorList.addOp(OPS.beginAnnotation, [
+    opList.addOp(OPS.beginAnnotation, [
       this.data.id,
       this.data.rect,
       transform,
@@ -1688,14 +1753,14 @@ class WidgetAnnotation extends Annotation {
       stream,
       task,
       resources: this._fieldResources.mergedResources,
-      operatorList,
+      operatorList: opList,
     });
-    operatorList.addOp(OPS.endAnnotation, []);
+    opList.addOp(OPS.endAnnotation, []);
 
     if (optionalContent !== undefined) {
-      operatorList.addOp(OPS.endMarkedContent, []);
+      opList.addOp(OPS.endMarkedContent, []);
     }
-    return operatorList;
+    return { opList, separateForm: false, separateCanvas: false };
   }
 
   _getMKDict(rotation) {
@@ -2196,7 +2261,7 @@ class TextWidgetAnnotation extends WidgetAnnotation {
     // Determine the maximum length of text in the field.
     let maximumLength = getInheritableProperty({ dict, key: "MaxLen" });
     if (!Number.isInteger(maximumLength) || maximumLength < 0) {
-      maximumLength = null;
+      maximumLength = 0;
     }
     this.data.maxLen = maximumLength;
 
@@ -2207,7 +2272,7 @@ class TextWidgetAnnotation extends WidgetAnnotation {
       !this.hasFieldFlag(AnnotationFieldFlag.MULTILINE) &&
       !this.hasFieldFlag(AnnotationFieldFlag.PASSWORD) &&
       !this.hasFieldFlag(AnnotationFieldFlag.FILESELECT) &&
-      this.data.maxLen !== null;
+      this.data.maxLen !== 0;
     this.data.doNotScroll = this.hasFieldFlag(AnnotationFieldFlag.DONOTSCROLL);
   }
 
@@ -2477,7 +2542,11 @@ class ButtonWidgetAnnotation extends WidgetAnnotation {
     }
 
     // No appearance
-    return new OperatorList();
+    return {
+      opList: new OperatorList(),
+      separateForm: false,
+      separateCanvas: false,
+    };
   }
 
   async save(evaluator, task, annotationStorage) {
@@ -2830,6 +2899,7 @@ class ButtonWidgetAnnotation extends WidgetAnnotation {
       destDict: params.dict,
       resultObj: this.data,
       docBaseUrl: params.pdfManager.docBaseUrl,
+      docAttachments: params.attachments,
     });
   }
 
@@ -3158,6 +3228,7 @@ class LinkAnnotation extends Annotation {
       destDict: params.dict,
       resultObj: this.data,
       docBaseUrl: params.pdfManager.docBaseUrl,
+      docAttachments: params.attachments,
     });
   }
 }
@@ -3236,6 +3307,10 @@ class FreeTextAnnotation extends MarkupAnnotation {
     super(parameters);
 
     this.data.annotationType = AnnotationType.FREETEXT;
+  }
+
+  get hasTextContent() {
+    return !!this.appearance;
   }
 
   static createNewDict(annotation, xref, { apRef, ap }) {
@@ -4025,4 +4100,5 @@ export {
   AnnotationFactory,
   getQuadPoints,
   MarkupAnnotation,
+  PopupAnnotation,
 };
