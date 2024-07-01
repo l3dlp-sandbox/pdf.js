@@ -307,11 +307,22 @@ class FreeTextEditor extends AnnotationEditor {
     this.editorDiv.contentEditable = true;
     this._isDraggable = false;
     this.div.removeAttribute("aria-activedescendant");
-    this.editorDiv.addEventListener("keydown", this.#boundEditorDivKeydown);
-    this.editorDiv.addEventListener("focus", this.#boundEditorDivFocus);
-    this.editorDiv.addEventListener("blur", this.#boundEditorDivBlur);
-    this.editorDiv.addEventListener("input", this.#boundEditorDivInput);
-    this.editorDiv.addEventListener("paste", this.#boundEditorDivPaste);
+    const signal = this._uiManager._signal;
+    this.editorDiv.addEventListener("keydown", this.#boundEditorDivKeydown, {
+      signal,
+    });
+    this.editorDiv.addEventListener("focus", this.#boundEditorDivFocus, {
+      signal,
+    });
+    this.editorDiv.addEventListener("blur", this.#boundEditorDivBlur, {
+      signal,
+    });
+    this.editorDiv.addEventListener("input", this.#boundEditorDivInput, {
+      signal,
+    });
+    this.editorDiv.addEventListener("paste", this.#boundEditorDivPaste, {
+      signal,
+    });
   }
 
   /** @inheritdoc */
@@ -357,7 +368,6 @@ class FreeTextEditor extends AnnotationEditor {
   /** @inheritdoc */
   onceAdded() {
     if (this.width) {
-      this.#cheatInitialRect();
       // The editor was created in using ctrl+c.
       return;
     }
@@ -409,11 +419,14 @@ class FreeTextEditor extends AnnotationEditor {
       // we just insert it in the DOM, get its bounding box and then remove it.
       const { currentLayer, div } = this;
       const savedDisplay = div.style.display;
+      const savedVisibility = div.classList.contains("hidden");
+      div.classList.remove("hidden");
       div.style.display = "hidden";
       currentLayer.div.append(this.div);
       rect = div.getBoundingClientRect();
       div.remove();
       div.style.display = savedDisplay;
+      div.classList.toggle("hidden", savedVisibility);
     }
 
     // The dimensions are relative to the rotation of the page, hence we need to
@@ -779,7 +792,7 @@ class FreeTextEditor extends AnnotationEditor {
         value: textContent.join("\n"),
         position: textPosition,
         pageIndex: pageNumber - 1,
-        rect,
+        rect: rect.slice(0),
         rotation,
         id,
         deleted: false,
@@ -844,34 +857,48 @@ class FreeTextEditor extends AnnotationEditor {
   }
 
   #hasElementChanged(serialized) {
-    const { value, fontSize, color, rect, pageIndex } = this.#initialData;
+    const { value, fontSize, color, pageIndex } = this.#initialData;
 
     return (
+      this._hasBeenMoved ||
       serialized.value !== value ||
       serialized.fontSize !== fontSize ||
-      serialized.rect.some((x, i) => Math.abs(x - rect[i]) >= 1) ||
       serialized.color.some((c, i) => c !== color[i]) ||
       serialized.pageIndex !== pageIndex
     );
   }
 
-  #cheatInitialRect(delayed = false) {
-    // The annotation has a rect but the editor has an other one.
-    // When we want to know if the annotation has changed (e.g. has been moved)
-    // we must compare the editor initial rect with the current one.
-    // So this method is a hack to have a way to compare the real rects.
-    if (!this.annotationElementId) {
-      return;
+  /** @inheritdoc */
+  renderAnnotationElement(annotation) {
+    const content = super.renderAnnotationElement(annotation);
+    if (this.deleted) {
+      return content;
     }
+    const { style } = content;
+    style.fontSize = `calc(${this.#fontSize}px * var(--scale-factor))`;
+    style.color = this.#color;
 
-    this.#setEditorDimensions();
-    if (!delayed && (this.width === 0 || this.height === 0)) {
-      setTimeout(() => this.#cheatInitialRect(/* delayed = */ true), 0);
-      return;
+    content.replaceChildren();
+    for (const line of this.#content.split("\n")) {
+      const div = document.createElement("div");
+      div.append(
+        line ? document.createTextNode(line) : document.createElement("br")
+      );
+      content.append(div);
     }
 
     const padding = FreeTextEditor._internalPadding * this.parentScale;
-    this.#initialData.rect = this.getRect(padding, padding);
+    annotation.updateEdited({
+      rect: this.getRect(padding, padding),
+      popupContent: this.#content,
+    });
+
+    return content;
+  }
+
+  resetAnnotationElement(annotation) {
+    super.resetAnnotationElement(annotation);
+    annotation.resetEdited();
   }
 }
 

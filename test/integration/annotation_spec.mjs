@@ -18,7 +18,6 @@ import {
   getQuerySelector,
   getSelector,
   loadAndWait,
-  waitForTimeout,
 } from "./test_utils.mjs";
 
 describe("Annotation highlight", () => {
@@ -75,13 +74,7 @@ describe("Annotation highlight", () => {
         pages.map(async ([browserName, page]) => {
           for (const i of [23, 22, 14]) {
             await page.click(`[data-annotation-id='${i}R']`);
-            await page.waitForFunction(
-              id =>
-                document.activeElement ===
-                document.querySelector(`#pdfjs_internal_id_${id}R`),
-              {},
-              i
-            );
+            await page.waitForSelector(`#pdfjs_internal_id_${i}R:focus`);
           }
         })
       );
@@ -170,9 +163,6 @@ describe("Checkbox annotation", () => {
           );
           for (const selector of selectors) {
             await page.click(selector);
-            await waitForTimeout(10);
-          }
-          for (const selector of selectors) {
             await page.waitForFunction(
               `document.querySelector("${selector} > :first-child").checked`
             );
@@ -229,7 +219,9 @@ describe("Text widget", () => {
         pages.map(async ([browserName, page]) => {
           await page.type(getSelector("22R"), "a");
           await page.keyboard.press("Tab");
-          await waitForTimeout(10);
+          await page.waitForFunction(
+            `${getQuerySelector("22R")}.value !== "Hello world"`
+          );
 
           const text = await page.$eval(getSelector("22R"), el => el.value);
           expect(text).withContext(`In ${browserName}`).toEqual("aHello World");
@@ -515,12 +507,10 @@ describe("ResetForm action", () => {
               `document.querySelector("[data-annotation-id='25R']").hidden === false`
             );
             await page.click("#editorFreeText");
-            await waitForTimeout(10);
             await page.waitForFunction(
               `document.querySelector("[data-annotation-id='25R']").hidden === true`
             );
             await page.click("#editorFreeText");
-            await waitForTimeout(10);
             await page.waitForFunction(
               `document.querySelector("[data-annotation-id='25R']").hidden === false`
             );
@@ -583,7 +573,9 @@ describe("ResetForm action", () => {
             expect(hidden).withContext(`In ${browserName}`).toEqual(true);
             await page.focus("[data-annotation-id='20R']");
             await page.keyboard.press("Enter");
-            await waitForTimeout(10);
+            await page.waitForFunction(
+              `document.querySelector("[data-annotation-id='21R']").hidden !== true`
+            );
             hidden = await page.$eval(
               "[data-annotation-id='21R']",
               el => el.hidden
@@ -591,7 +583,9 @@ describe("ResetForm action", () => {
             expect(hidden).withContext(`In ${browserName}`).toEqual(false);
 
             await page.keyboard.press("Enter");
-            await waitForTimeout(10);
+            await page.waitForFunction(
+              `document.querySelector("[data-annotation-id='21R']").hidden !== false`
+            );
             hidden = await page.$eval(
               "[data-annotation-id='21R']",
               el => el.hidden
@@ -599,7 +593,9 @@ describe("ResetForm action", () => {
             expect(hidden).withContext(`In ${browserName}`).toEqual(true);
 
             await page.keyboard.press("Enter");
-            await waitForTimeout(10);
+            await page.waitForFunction(
+              `document.querySelector("[data-annotation-id='21R']").hidden !== true`
+            );
             hidden = await page.$eval(
               "[data-annotation-id='21R']",
               el => el.hidden
@@ -607,7 +603,9 @@ describe("ResetForm action", () => {
             expect(hidden).withContext(`In ${browserName}`).toEqual(false);
 
             await page.keyboard.press("Escape");
-            await waitForTimeout(10);
+            await page.waitForFunction(
+              `document.querySelector("[data-annotation-id='21R']").hidden !== false`
+            );
             hidden = await page.$eval(
               "[data-annotation-id='21R']",
               el => el.hidden

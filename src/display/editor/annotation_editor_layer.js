@@ -248,7 +248,9 @@ class AnnotationEditorLayer {
     const annotationElementIds = new Set();
     for (const editor of this.#editors.values()) {
       editor.enableEditing();
+      editor.show(true);
       if (editor.annotationElementId) {
+        this.#uiManager.removeChangedExistingAnnotation(editor);
         annotationElementIds.add(editor.annotationElementId);
       }
     }
@@ -283,12 +285,18 @@ class AnnotationEditorLayer {
     this.#isDisabling = true;
     this.div.tabIndex = -1;
     this.togglePointerEvents(false);
-    const hiddenAnnotationIds = new Set();
+    const changedAnnotations = new Map();
+    const resetAnnotations = new Map();
     for (const editor of this.#editors.values()) {
       editor.disableEditing();
-      if (!editor.annotationElementId || editor.serialize() !== null) {
-        hiddenAnnotationIds.add(editor.annotationElementId);
+      if (!editor.annotationElementId) {
         continue;
+      }
+      if (editor.serialize() !== null) {
+        changedAnnotations.set(editor.annotationElementId, editor);
+        continue;
+      } else {
+        resetAnnotations.set(editor.annotationElementId, editor);
       }
       this.getEditableAnnotation(editor.annotationElementId)?.show();
       editor.remove();
@@ -299,11 +307,22 @@ class AnnotationEditorLayer {
       const editables = this.#annotationLayer.getEditableAnnotations();
       for (const editable of editables) {
         const { id } = editable.data;
-        if (
-          hiddenAnnotationIds.has(id) ||
-          this.#uiManager.isDeletedAnnotationElement(id)
-        ) {
+        if (this.#uiManager.isDeletedAnnotationElement(id)) {
           continue;
+        }
+        let editor = resetAnnotations.get(id);
+        if (editor) {
+          editor.resetAnnotationElement(editable);
+          editor.show(false);
+          editable.show();
+          continue;
+        }
+
+        editor = changedAnnotations.get(id);
+        if (editor) {
+          this.#uiManager.addChangedExistingAnnotation(editor);
+          editor.renderAnnotationElement(editable);
+          editor.show(false);
         }
         editable.show();
       }
@@ -346,7 +365,8 @@ class AnnotationEditorLayer {
       this.#boundTextLayerPointerDown = this.#textLayerPointerDown.bind(this);
       this.#textLayer.div.addEventListener(
         "pointerdown",
-        this.#boundTextLayerPointerDown
+        this.#boundTextLayerPointerDown,
+        { signal: this.#uiManager._signal }
       );
       this.#textLayer.div.classList.add("highlighting");
     }
@@ -390,7 +410,7 @@ class AnnotationEditorLayer {
         () => {
           this.#textLayer.div.classList.remove("free");
         },
-        { once: true }
+        { once: true, signal: this.#uiManager._signal }
       );
       event.preventDefault();
     }
@@ -400,10 +420,13 @@ class AnnotationEditorLayer {
     if (this.#boundPointerdown) {
       return;
     }
+    const signal = this.#uiManager._signal;
     this.#boundPointerdown = this.pointerdown.bind(this);
     this.#boundPointerup = this.pointerup.bind(this);
-    this.div.addEventListener("pointerdown", this.#boundPointerdown);
-    this.div.addEventListener("pointerup", this.#boundPointerup);
+    this.div.addEventListener("pointerdown", this.#boundPointerdown, {
+      signal,
+    });
+    this.div.addEventListener("pointerup", this.#boundPointerup, { signal });
   }
 
   disableClick() {
@@ -461,7 +484,7 @@ class AnnotationEditorLayer {
       return;
     }
 
-    if (editor.annotationElementId) {
+    if (editor.parent && editor.annotationElementId) {
       this.#uiManager.addDeletedAnnotationElement(editor.annotationElementId);
       AnnotationEditor.deleteAnnotationElement(editor);
       editor.annotationElementId = null;
@@ -481,6 +504,9 @@ class AnnotationEditorLayer {
    * @param {AnnotationEditor} editor
    */
   add(editor) {
+    if (editor.parent === this && editor.isAttachedToDOM) {
+      return;
+    }
     this.changeParent(editor);
     this.#uiManager.addEditor(editor);
     this.attach(editor);
@@ -518,7 +544,7 @@ class AnnotationEditorLayer {
             () => {
               editor._focusEventsAllowed = true;
             },
-            { once: true }
+            { once: true, signal: this.#uiManager._signal }
           );
           activeElement.focus();
         } else {
@@ -572,6 +598,10 @@ class AnnotationEditorLayer {
 
   get #currentEditorType() {
     return AnnotationEditorLayer.#editorTypes.get(this.#uiManager.getMode());
+  }
+
+  get _signal() {
+    return this.#uiManager._signal;
   }
 
   /**

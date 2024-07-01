@@ -40,6 +40,8 @@ import { noContextMenu } from "../display_utils.js";
  * Base class for editors.
  */
 class AnnotationEditor {
+  #accessibilityData = null;
+
   #allResizerDivs = null;
 
   #altText = null;
@@ -61,6 +63,8 @@ class AnnotationEditor {
   #focusedResizerName = "";
 
   #hasBeenClicked = false;
+
+  #initialPosition = null;
 
   #isEditing = false;
 
@@ -445,6 +449,8 @@ class AnnotationEditor {
    * @param {number} y - y-translation in screen coordinates.
    */
   translate(x, y) {
+    // We don't change the initial position because the move here hasn't been
+    // done by the user.
     this.#translate(this.parentDimensions, x, y);
   }
 
@@ -455,11 +461,13 @@ class AnnotationEditor {
    * @param {number} y - y-translation in page coordinates.
    */
   translateInPage(x, y) {
+    this.#initialPosition ||= [this.x, this.y];
     this.#translate(this.pageDimensions, x, y);
     this.div.scrollIntoView({ block: "nearest" });
   }
 
   drag(tx, ty) {
+    this.#initialPosition ||= [this.x, this.y];
     const [parentWidth, parentHeight] = this.parentDimensions;
     this.x += tx / parentWidth;
     this.y += ty / parentHeight;
@@ -490,6 +498,14 @@ class AnnotationEditor {
     this.div.style.left = `${(100 * x).toFixed(2)}%`;
     this.div.style.top = `${(100 * y).toFixed(2)}%`;
     this.div.scrollIntoView({ block: "nearest" });
+  }
+
+  get _hasBeenMoved() {
+    return (
+      !!this.#initialPosition &&
+      (this.#initialPosition[0] !== this.x ||
+        this.#initialPosition[1] !== this.y)
+    );
   }
 
   /**
@@ -701,6 +717,7 @@ class AnnotationEditor {
           "bottomLeft",
           "middleLeft",
         ];
+    const signal = this._uiManager._signal;
     for (const name of classes) {
       const div = document.createElement("div");
       this.#resizersDiv.append(div);
@@ -708,9 +725,10 @@ class AnnotationEditor {
       div.setAttribute("data-resizer-name", name);
       div.addEventListener(
         "pointerdown",
-        this.#resizerPointerdown.bind(this, name)
+        this.#resizerPointerdown.bind(this, name),
+        { signal }
       );
-      div.addEventListener("contextmenu", noContextMenu);
+      div.addEventListener("contextmenu", noContextMenu, { signal });
       div.tabIndex = -1;
     }
     this.div.prepend(this.#resizersDiv);
@@ -728,13 +746,15 @@ class AnnotationEditor {
     const boundResizerPointermove = this.#resizerPointermove.bind(this, name);
     const savedDraggable = this._isDraggable;
     this._isDraggable = false;
-    const pointerMoveOptions = { passive: true, capture: true };
+    const signal = this._uiManager._signal;
+    const pointerMoveOptions = { passive: true, capture: true, signal };
     this.parent.togglePointerEvents(false);
     window.addEventListener(
       "pointermove",
       boundResizerPointermove,
       pointerMoveOptions
     );
+    window.addEventListener("contextmenu", noContextMenu, { signal });
     const savedX = this.x;
     const savedY = this.y;
     const savedWidth = this.width;
@@ -755,15 +775,16 @@ class AnnotationEditor {
         boundResizerPointermove,
         pointerMoveOptions
       );
+      window.removeEventListener("contextmenu", noContextMenu);
       this.parent.div.style.cursor = savedParentCursor;
       this.div.style.cursor = savedCursor;
 
       this.#addResizeToUndoStack(savedX, savedY, savedWidth, savedHeight);
     };
-    window.addEventListener("pointerup", pointerUpCallback);
+    window.addEventListener("pointerup", pointerUpCallback, { signal });
     // If the user switches to another window (with alt+tab), then we end the
     // resize session.
-    window.addEventListener("blur", pointerUpCallback);
+    window.addEventListener("blur", pointerUpCallback, { signal });
   }
 
   #addResizeToUndoStack(savedX, savedY, savedWidth, savedHeight) {
@@ -974,6 +995,10 @@ class AnnotationEditor {
     }
     AltText.initialize(AnnotationEditor._l10nPromise);
     this.#altText = new AltText(this);
+    if (this.#accessibilityData) {
+      this.#altText.data = this.#accessibilityData;
+      this.#accessibilityData = null;
+    }
     await this.addEditToolbar();
   }
 
@@ -1011,8 +1036,9 @@ class AnnotationEditor {
 
     this.setInForeground();
 
-    this.div.addEventListener("focusin", this.#boundFocusin);
-    this.div.addEventListener("focusout", this.#boundFocusout);
+    const signal = this._uiManager._signal;
+    this.div.addEventListener("focusin", this.#boundFocusin, { signal });
+    this.div.addEventListener("focusout", this.#boundFocusout, { signal });
 
     const [parentWidth, parentHeight] = this.parentDimensions;
     if (this.parentRotation % 180 !== 0) {
@@ -1073,9 +1099,10 @@ class AnnotationEditor {
     this._uiManager.setUpDragSession();
 
     let pointerMoveOptions, pointerMoveCallback;
+    const signal = this._uiManager._signal;
     if (isSelected) {
       this.div.classList.add("moving");
-      pointerMoveOptions = { passive: true, capture: true };
+      pointerMoveOptions = { passive: true, capture: true, signal };
       this.#prevDragX = event.clientX;
       this.#prevDragY = event.clientY;
       pointerMoveCallback = e => {
@@ -1112,11 +1139,11 @@ class AnnotationEditor {
         this.#selectOnPointerEvent(event);
       }
     };
-    window.addEventListener("pointerup", pointerUpCallback);
+    window.addEventListener("pointerup", pointerUpCallback, { signal });
     // If the user is using alt+tab during the dragging session, the pointerup
     // event could be not fired, but a blur event is fired so we can use it in
     // order to interrupt the dragging session.
-    window.addEventListener("blur", pointerUpCallback);
+    window.addEventListener("blur", pointerUpCallback, { signal });
   }
 
   moveInDOM() {
@@ -1268,8 +1295,9 @@ class AnnotationEditor {
    * To implement in subclasses.
    */
   rebuild() {
-    this.div?.addEventListener("focusin", this.#boundFocusin);
-    this.div?.addEventListener("focusout", this.#boundFocusout);
+    const signal = this._uiManager._signal;
+    this.div?.addEventListener("focusin", this.#boundFocusin, { signal });
+    this.div?.addEventListener("focusout", this.#boundFocusout, { signal });
   }
 
   /**
@@ -1308,6 +1336,7 @@ class AnnotationEditor {
       uiManager,
     });
     editor.rotation = data.rotation;
+    editor.#accessibilityData = data.accessibilityData;
 
     const [pageWidth, pageHeight] = editor.pageDimensions;
     const [x, y, width, height] = editor.getRectInCurrentCoords(
@@ -1320,6 +1349,17 @@ class AnnotationEditor {
     editor.height = height / pageHeight;
 
     return editor;
+  }
+
+  /**
+   * Check if an existing annotation associated with this editor has been
+   * modified.
+   * @returns {boolean}
+   */
+  get hasBeenModified() {
+    return (
+      !!this.annotationElementId && (this.deleted || this.serialize() !== null)
+    );
   }
 
   /**
@@ -1402,12 +1442,15 @@ class AnnotationEditor {
       this.#allResizerDivs = Array.from(children);
       const boundResizerKeydown = this.#resizerKeydown.bind(this);
       const boundResizerBlur = this.#resizerBlur.bind(this);
+      const signal = this._uiManager._signal;
       for (const div of this.#allResizerDivs) {
         const name = div.getAttribute("data-resizer-name");
         div.setAttribute("role", "spinbutton");
-        div.addEventListener("keydown", boundResizerKeydown);
-        div.addEventListener("blur", boundResizerBlur);
-        div.addEventListener("focus", this.#resizerFocus.bind(this, name));
+        div.addEventListener("keydown", boundResizerKeydown, { signal });
+        div.addEventListener("blur", boundResizerBlur, { signal });
+        div.addEventListener("focus", this.#resizerFocus.bind(this, name), {
+          signal,
+        });
         AnnotationEditor._l10nPromise
           .get(`pdfjs-editor-resizer-label-${name}`)
           .then(msg => div.setAttribute("aria-label", msg));
@@ -1695,6 +1738,37 @@ class AnnotationEditor {
       this.div.tabIndex = -1;
     }
     this.#disabled = true;
+  }
+
+  /**
+   * Render an annotation in the annotation layer.
+   * @param {Object} annotation
+   * @returns {HTMLElement}
+   */
+  renderAnnotationElement(annotation) {
+    let content = annotation.container.querySelector(".annotationContent");
+    if (!content) {
+      content = document.createElement("div");
+      content.classList.add("annotationContent", this.editorType);
+      annotation.container.prepend(content);
+    } else if (content.nodeName === "CANVAS") {
+      const canvas = content;
+      content = document.createElement("div");
+      content.classList.add("annotationContent", this.editorType);
+      canvas.before(content);
+    }
+
+    return content;
+  }
+
+  resetAnnotationElement(annotation) {
+    const { firstChild } = annotation.container;
+    if (
+      firstChild.nodeName === "DIV" &&
+      firstChild.classList.contains("annotationContent")
+    ) {
+      firstChild.remove();
+    }
   }
 }
 

@@ -22,6 +22,8 @@
 /** @typedef {import("./interfaces").IPDFLinkService} IPDFLinkService */
 // eslint-disable-next-line max-len
 /** @typedef {import("./text_accessibility.js").TextAccessibilityManager} TextAccessibilityManager */
+// eslint-disable-next-line max-len
+/** @typedef {import("../src/display/editor/tools.js").AnnotationEditorUIManager} AnnotationEditorUIManager */
 
 import { AnnotationLayer } from "pdfjs-lib";
 import { PresentationModeState } from "./ui_utils.js";
@@ -41,13 +43,14 @@ import { PresentationModeState } from "./ui_utils.js";
  *   [fieldObjectsPromise]
  * @property {Map<string, HTMLCanvasElement>} [annotationCanvasMap]
  * @property {TextAccessibilityManager} [accessibilityManager]
+ * @property {AnnotationEditorUIManager} [annotationEditorUIManager]
  * @property {function} [onAppend]
  */
 
 class AnnotationLayerBuilder {
   #onAppend = null;
 
-  #onPresentationModeChanged = null;
+  #eventAbortController = null;
 
   /**
    * @param {AnnotationLayerBuilderOptions} options
@@ -64,6 +67,7 @@ class AnnotationLayerBuilder {
     fieldObjectsPromise = null,
     annotationCanvasMap = null,
     accessibilityManager = null,
+    annotationEditorUIManager = null,
     onAppend = null,
   }) {
     this.pdfPage = pdfPage;
@@ -77,6 +81,7 @@ class AnnotationLayerBuilder {
     this._fieldObjectsPromise = fieldObjectsPromise || Promise.resolve(null);
     this._annotationCanvasMap = annotationCanvasMap;
     this._accessibilityManager = accessibilityManager;
+    this._annotationEditorUIManager = annotationEditorUIManager;
     this.#onAppend = onAppend;
 
     this.annotationLayer = null;
@@ -128,6 +133,7 @@ class AnnotationLayerBuilder {
       div,
       accessibilityManager: this._accessibilityManager,
       annotationCanvasMap: this._annotationCanvasMap,
+      annotationEditorUIManager: this._annotationEditorUIManager,
       page: this.pdfPage,
       viewport: viewport.clone({ dontFlip: true }),
     });
@@ -149,13 +155,15 @@ class AnnotationLayerBuilder {
     if (this.linkService.isInPresentationMode) {
       this.#updatePresentationModeState(PresentationModeState.FULLSCREEN);
     }
-    if (!this.#onPresentationModeChanged) {
-      this.#onPresentationModeChanged = evt => {
-        this.#updatePresentationModeState(evt.state);
-      };
+    if (!this.#eventAbortController) {
+      this.#eventAbortController = new AbortController();
+
       this._eventBus?._on(
         "presentationmodechanged",
-        this.#onPresentationModeChanged
+        evt => {
+          this.#updatePresentationModeState(evt.state);
+        },
+        { signal: this.#eventAbortController.signal }
       );
     }
   }
@@ -163,13 +171,8 @@ class AnnotationLayerBuilder {
   cancel() {
     this._cancelled = true;
 
-    if (this.#onPresentationModeChanged) {
-      this._eventBus?._off(
-        "presentationmodechanged",
-        this.#onPresentationModeChanged
-      );
-      this.#onPresentationModeChanged = null;
-    }
+    this.#eventAbortController?.abort();
+    this.#eventAbortController = null;
   }
 
   hide() {
