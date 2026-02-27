@@ -58,6 +58,7 @@
   --sidebar-width: 230px;
   --sidebar-min-width: min-content;
   --sidebar-max-width: 50vw;
+  --sidebar-block-padding: 8px;
 
   --text-color: light-dark(#15141a, #fbfbfe);
   --button-fg: var(--text-color);
@@ -176,9 +177,9 @@
   padding-bottom: 16px;
   flex-direction: column;
   align-items: flex-start;
+  inset-block-start: calc(100% + var(--sidebar-block-padding));
   height: calc(
-    var(--viewer-container-height) - var(--toolbar-height) -
-      var(--doorhanger-height)
+    var(--viewer-container-height) - 2 * var(--sidebar-block-padding)
   );
   position: absolute;
 
