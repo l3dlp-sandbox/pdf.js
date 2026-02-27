@@ -548,7 +548,7 @@
       align-items: center;
       justify-content: space-evenly;
       padding: 20px 32px;
-      gap: 20px;
+      gap: 44px;
       width: 100%;
       box-sizing: border-box;
       position: relative;
@@ -609,12 +609,15 @@
       }
 
       > .thumbnail {
+        --input-dim: 16px;
+        --gap-between-input-and-thumbnail: 16px;
+
         display: inline-flex;
-        justify-content: center;
+        justify-content: flex-end;
         align-items: center;
         flex-direction: row-reverse;
-        gap: 16px;
-        width: auto;
+        gap: var(--gap-between-input-and-thumbnail);
+        width: 190px;
         height: auto;
         position: relative;
         scroll-margin-top: 20px;
@@ -662,6 +665,9 @@
 
         > input {
           margin: 0;
+          width: var(--input-dim);
+          height: var(--input-dim);
+          accent-color: var(--indicator-color);
         }
 
         > .thumbnailImageContainer {
