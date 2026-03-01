@@ -25,184 +25,104 @@ import istanbulCoverage from "istanbul-lib-coverage";
 import istanbulReportGenerator from "istanbul-reports";
 import libReport from "istanbul-lib-report";
 import os from "os";
+import { parseArgs } from "node:util";
 import path from "path";
 import puppeteer from "puppeteer";
 import readline from "readline";
 import { translateFont } from "./font/ttxdriver.mjs";
 import { WebServer } from "./webserver.mjs";
-import yargs from "yargs";
 
 const __dirname = import.meta.dirname;
 
 function parseOptions() {
-  const parsedArgs = yargs(process.argv)
-    .usage("Usage: $0")
-    .option("downloadOnly", {
-      default: false,
-      describe: "Download test PDFs without running the tests.",
-      type: "boolean",
-    })
-    .option("fontTest", {
-      default: false,
-      describe: "Run the font tests.",
-      type: "boolean",
-    })
-    .option("help", {
-      alias: "h",
-      default: false,
-      describe: "Show this help message.",
-      type: "boolean",
-    })
-    .option("integration", {
-      default: false,
-      describe: "Run the integration tests.",
-      type: "boolean",
-    })
-    .option("manifestFile", {
-      default: "test_manifest.json",
-      describe: "A path to JSON file in the form of `test_manifest.json`.",
-      type: "string",
-    })
-    .option("masterMode", {
-      alias: "m",
-      default: false,
-      describe: "Run the script in master mode.",
-      type: "boolean",
-    })
-    .option("noChrome", {
-      default: false,
-      describe: "Skip Chrome when running tests.",
-      type: "boolean",
-    })
-    .option("noFirefox", {
-      default: false,
-      describe: "Skip Firefox when running tests.",
-      type: "boolean",
-    })
-    .option("noDownload", {
-      default: false,
-      describe: "Skip downloading of test PDFs.",
-      type: "boolean",
-    })
-    .option("noPrompts", {
-      default: false,
-      describe: "Uses default answers (intended for CLOUD TESTS only!).",
-      type: "boolean",
-    })
-    .option("headless", {
-      default: false,
-      describe:
-        "Run the tests in headless mode, i.e. without visible browser windows.",
-      type: "boolean",
-    })
-    .option("port", {
-      default: 0,
-      describe: "The port the HTTP server should listen on.",
-      type: "number",
-    })
-    .option("reftest", {
-      default: false,
-      describe:
-        "Automatically start reftest showing comparison test failures, if there are any.",
-      type: "boolean",
-    })
-    .option("statsDelay", {
-      default: 0,
-      describe:
-        "The amount of time in milliseconds the browser should wait before starting stats.",
-      type: "number",
-    })
-    .option("statsFile", {
-      default: "",
-      describe: "The file where to store stats.",
-      type: "string",
-    })
-    .option("strictVerify", {
-      default: false,
-      describe: "Error if verifying the manifest files fails.",
-      type: "boolean",
-    })
-    .option("coverage", {
-      default: false,
-      describe: "Enable code coverage collection.",
-      type: "boolean",
-    })
-    .option("coverageOutput", {
-      default: "build/coverage",
-      describe: "The directory where to store code coverage data.",
-      type: "string",
-    })
-    .option("testfilter", {
-      alias: "t",
-      default: [],
-      describe: "Run specific reftest(s).",
-      type: "array",
-    })
-    .example(
-      "testfilter",
-      "$0 -t=issue5567 -t=issue5909\n" +
-        "Run the reftest identified by issue5567 and issue5909."
-    )
-    .option("unitTest", {
-      default: false,
-      describe: "Run the unit tests.",
-      type: "boolean",
-    })
-    .option("xfaOnly", {
-      default: false,
-      describe: "Only run the XFA reftest(s).",
-      type: "boolean",
-    })
-    .check(argv => {
-      if (
-        +argv.reftest + argv.unitTest + argv.fontTest + argv.masterMode <=
-        1
-      ) {
-        return true;
-      }
-      throw new Error(
-        "--reftest, --unitTest, --fontTest, and --masterMode must not be specified together."
-      );
-    })
-    .check(argv => {
-      if (
-        +argv.unitTest + argv.fontTest + argv.integration + argv.xfaOnly <=
-        1
-      ) {
-        return true;
-      }
-      throw new Error(
-        "--unitTest, --fontTest, --integration, and --xfaOnly must not be specified together."
-      );
-    })
-    .check(argv => {
-      if (argv.testfilter?.length > 0 && argv.xfaOnly) {
-        throw new Error("--testfilter and --xfaOnly cannot be used together.");
-      }
-      return true;
-    })
-    .check(argv => {
-      if (!argv.noDownload || !argv.downloadOnly) {
-        return true;
-      }
-      throw new Error(
-        "--noDownload and --downloadOnly cannot be used together."
-      );
-    })
-    .check(argv => {
-      if (!argv.masterMode || argv.manifestFile === "test_manifest.json") {
-        return true;
-      }
-      throw new Error(
-        "when --masterMode is specified --manifestFile shall be equal to `test_manifest.json`."
-      );
-    });
+  const { values } = parseArgs({
+    args: process.argv.slice(2),
+    options: {
+      coverage: { type: "boolean", default: false },
+      coverageOutput: { type: "string", default: "build/coverage" },
+      downloadOnly: { type: "boolean", default: false },
+      fontTest: { type: "boolean", default: false },
+      headless: { type: "boolean", default: false },
+      help: { type: "boolean", short: "h", default: false },
+      integration: { type: "boolean", default: false },
+      manifestFile: { type: "string", default: "test_manifest.json" },
+      masterMode: { type: "boolean", short: "m", default: false },
+      noChrome: { type: "boolean", default: false },
+      noDownload: { type: "boolean", default: false },
+      noFirefox: { type: "boolean", default: false },
+      noPrompts: { type: "boolean", default: false },
+      port: { type: "string", default: "0" },
+      reftest: { type: "boolean", default: false },
+      statsDelay: { type: "string", default: "0" },
+      statsFile: { type: "string", default: "" },
+      strictVerify: { type: "boolean", default: false },
+      testfilter: { type: "string", short: "t", multiple: true, default: [] },
+      unitTest: { type: "boolean", default: false },
+      xfaOnly: { type: "boolean", default: false },
+    },
+  });
 
-  const result = parsedArgs.argv;
-  result.testfilter = Array.isArray(result.testfilter)
-    ? result.testfilter
-    : [result.testfilter];
-  return result;
+  if (values.help) {
+    console.log(
+      "Usage: test.mjs\n\n" +
+        "  --coverage          Enable code coverage collection.\n" +
+        "  --coverageOutput    Directory for code coverage data. [build/coverage]\n" +
+        "  --downloadOnly      Download test PDFs without running the tests.\n" +
+        "  --fontTest          Run the font tests.\n" +
+        "  --headless          Run tests without visible browser windows.\n" +
+        "  --help, -h          Show this help message.\n" +
+        "  --integration       Run the integration tests.\n" +
+        "  --manifestFile      Path to manifest JSON file. [test_manifest.json]\n" +
+        "  --masterMode, -m    Run the script in master mode.\n" +
+        "  --noChrome          Skip Chrome when running tests.\n" +
+        "  --noDownload        Skip downloading of test PDFs.\n" +
+        "  --noFirefox         Skip Firefox when running tests.\n" +
+        "  --noPrompts         Use default answers (for CLOUD TESTS only!).\n" +
+        "  --port              Port for the HTTP server. [0]\n" +
+        "  --reftest           Start reftest viewer on comparison failures.\n" +
+        "  --statsDelay        Milliseconds to wait before starting stats. [0]\n" +
+        "  --statsFile         File where to store stats.\n" +
+        "  --strictVerify      Error if manifest file verification fails.\n" +
+        "  --testfilter, -t    Run specific reftest(s), e.g. -t=issue5567.\n" +
+        "  --unitTest          Run the unit tests.\n" +
+        "  --xfaOnly           Only run the XFA reftest(s)."
+    );
+    process.exit(0);
+  }
+
+  if (
+    +values.reftest + values.unitTest + values.fontTest + values.masterMode >
+    1
+  ) {
+    throw new Error(
+      "--reftest, --unitTest, --fontTest, and --masterMode must not be specified together."
+    );
+  }
+  if (
+    +values.unitTest + values.fontTest + values.integration + values.xfaOnly >
+    1
+  ) {
+    throw new Error(
+      "--unitTest, --fontTest, --integration, and --xfaOnly must not be specified together."
+    );
+  }
+  if (values.testfilter.length > 0 && values.xfaOnly) {
+    throw new Error("--testfilter and --xfaOnly cannot be used together.");
+  }
+  if (values.noDownload && values.downloadOnly) {
+    throw new Error("--noDownload and --downloadOnly cannot be used together.");
+  }
+  if (values.masterMode && values.manifestFile !== "test_manifest.json") {
+    throw new Error(
+      "when --masterMode is specified --manifestFile shall be equal to `test_manifest.json`."
+    );
+  }
+
+  return {
+    ...values,
+    port: parseInt(values.port, 10) || 0,
+    statsDelay: parseInt(values.statsDelay, 10) || 0,
+  };
 }
 
 var refsTmpDir = "tmp";

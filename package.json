@@ -65,8 +65,7 @@
     "typescript": "^5.9.3",
     "vinyl": "^3.0.1",
     "webpack": "^5.105.2",
-    "webpack-stream": "^7.0.0",
-    "yargs": "^18.0.0"
+    "webpack-stream": "^7.0.0"
   },
   "repository": {
     "type": "git",

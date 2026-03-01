@@ -2,6 +2,7 @@
 
 import { createRequire } from "module";
 import fs from "fs";
+import { parseArgs } from "node:util";
 
 const require = createRequire(import.meta.url);
 const ttest = require("ttest");
@@ -9,26 +10,28 @@ const ttest = require("ttest");
 const VALID_GROUP_BYS = ["browser", "pdf", "page", "round", "stat"];
 
 function parseOptions() {
-  const yargs = require("yargs")
-    .usage(
+  const { values, positionals } = parseArgs({
+    args: process.argv.slice(2),
+    allowPositionals: true,
+    options: {
+      groupBy: { type: "string", default: "browser,stat" },
+    },
+  });
+
+  if (positionals.length < 2) {
+    console.error(
       "Compare the results of two stats files.\n" +
-        "Usage:\n  $0 <BASELINE> <CURRENT> [options]"
-    )
-    .demand(2)
-    .string(["groupBy"])
-    .describe(
-      "groupBy",
-      "How statistics should grouped. Valid options: " +
-        VALID_GROUP_BYS.join(" ")
-    )
-    .default("groupBy", "browser,stat");
-  const result = yargs.argv;
-  result.baseline = result._[0];
-  result.current = result._[1];
-  if (result.groupBy) {
-    result.groupBy = result.groupBy.split(/[;, ]+/);
+        "Usage:\n  statcmp.js <BASELINE> <CURRENT> [--groupBy=<fields>]\n\n" +
+        `  --groupBy    How statistics should be grouped. Valid options: ${VALID_GROUP_BYS.join(" ")}. [browser,stat]`
+    );
+    process.exit(1);
   }
-  return result;
+
+  return {
+    baseline: positionals[0],
+    current: positionals[1],
+    groupBy: values.groupBy.split(/[;, ]+/),
+  };
 }
 
 function group(stats, groupBy) {
