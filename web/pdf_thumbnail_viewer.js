@@ -127,6 +127,12 @@ class PDFThumbnailViewer {
 
   #isCut = false;
 
+  #isOneColumnView = false;
+
+  #scrollableContainerWidth = 0;
+
+  #scrollableContainerHeight = 0;
+
   /**
    * @param {PDFThumbnailViewerOptions} options
    */
@@ -720,10 +726,28 @@ class PDFThumbnailViewer {
   }
 
   #moveDraggedContainer(dx, dy) {
-    this.#draggedImageOffsetX += dx;
-    this.#draggedImageOffsetY += dy;
+    if (this.#isOneColumnView) {
+      dx = 0;
+    }
+    if (
+      this.#draggedImageX + dx < 0 ||
+      this.#draggedImageX + this.#draggedImageWidth + dx >
+        this.#scrollableContainerWidth
+    ) {
+      dx = 0;
+    }
+    if (
+      this.#draggedImageY + dy < 0 ||
+      this.#draggedImageY + this.#draggedImageHeight + dy >
+        this.#scrollableContainerHeight
+    ) {
+      dy = 0;
+    }
+
     this.#draggedImageX += dx;
     this.#draggedImageY += dy;
+    this.#draggedImageOffsetX += dx;
+    this.#draggedImageOffsetY += dy;
     this.#draggedContainer.style.translate = `${this.#draggedImageOffsetX}px ${this.#draggedImageOffsetY}px`;
     if (
       this.#draggedImageY + this.#draggedImageHeight >
@@ -731,7 +755,7 @@ class PDFThumbnailViewer {
     ) {
       this.scrollableContainer.scrollTop = Math.min(
         this.scrollableContainer.scrollTop + PIXELS_TO_SCROLL_WHEN_DRAGGING,
-        this.scrollableContainer.scrollHeight
+        this.#scrollableContainerHeight
       );
     } else if (this.#draggedImageY < this.#currentScrollTop) {
       this.scrollableContainer.scrollTop = Math.max(
@@ -843,6 +867,11 @@ class PDFThumbnailViewer {
       lastSpace: (positionsLastX.at(-1) - lastRightX) / 2,
       bbox,
     };
+    this.#isOneColumnView = positionsX.length === 1;
+    ({
+      clientWidth: this.#scrollableContainerWidth,
+      scrollHeight: this.#scrollableContainerHeight,
+    } = this.scrollableContainer);
   }
 
   #addEventListeners() {
@@ -954,6 +983,7 @@ class PDFThumbnailViewer {
         pointerId: dragPointerId,
       } = e;
       if (
+        e.button !== 0 || // Skip right click.
         this.#pagesMapper.copiedPageNumbers?.length > 0 ||
         !isNaN(this.#lastDraggedOverIndex) ||
         !draggedImage.classList.contains("thumbnailImageContainer")
@@ -973,11 +1003,18 @@ class PDFThumbnailViewer {
       // same position on the thumbnail, we need to adjust the offset
       // accordingly.
       const scaleFactor = PDFThumbnailViewer.#getScaleFactor(draggedImage);
-      this.#draggedImageOffsetX =
-        ((scaleFactor - 1) * e.layerX + draggedImage.offsetLeft) / scaleFactor;
       this.#draggedImageOffsetY =
         ((scaleFactor - 1) * e.layerY + draggedImage.offsetTop) / scaleFactor;
 
+      if (this.#isOneColumnView) {
+        this.#draggedImageOffsetX =
+          draggedImage.offsetLeft +
+          ((scaleFactor - 1) * 0.5 * draggedImage.offsetWidth) / scaleFactor;
+      } else {
+        this.#draggedImageOffsetX =
+          ((scaleFactor - 1) * e.layerX + draggedImage.offsetLeft) /
+          scaleFactor;
+      }
       this.#draggedImageX = thumbnail.offsetLeft + this.#draggedImageOffsetX;
       this.#draggedImageY = thumbnail.offsetTop + this.#draggedImageOffsetY;
       this.#draggedImageWidth = draggedImage.offsetWidth / scaleFactor;
@@ -987,16 +1024,16 @@ class PDFThumbnailViewer {
         "pointermove",
         ev => {
           const { clientX: x, clientY: y, pointerId } = ev;
-          if (
-            pointerId !== dragPointerId ||
-            (Math.abs(x - clickX) <= DRAG_THRESHOLD_IN_PIXELS &&
-              Math.abs(y - clickY) <= DRAG_THRESHOLD_IN_PIXELS)
-          ) {
-            // Not enough movement to be considered a drag.
-            return;
-          }
-
           if (isNaN(this.#lastDraggedOverIndex)) {
+            if (
+              pointerId !== dragPointerId ||
+              (Math.abs(x - clickX) <= DRAG_THRESHOLD_IN_PIXELS &&
+                Math.abs(y - clickY) <= DRAG_THRESHOLD_IN_PIXELS)
+            ) {
+              // Not enough movement to be considered a drag.
+              return;
+            }
+
             // First movement while dragging.
             this.#onStartDragging(thumbnail);
             const stopDragging = (_e, isDropping = false) => {
@@ -1047,6 +1084,18 @@ class PDFThumbnailViewer {
               passive: false,
               signal,
             });
+            window.addEventListener(
+              "keydown",
+              kEv => {
+                if (
+                  kEv.key === "Escape" &&
+                  !isNaN(this.#lastDraggedOverIndex)
+                ) {
+                  stopDragging(kEv);
+                }
+              },
+              { signal }
+            );
           }
 
           const dx = x - prevDragX;
@@ -1155,6 +1204,16 @@ class PDFThumbnailViewer {
     }
   }
 
+  // Given the drag center (x, y), find the drop slot index: the drag marker
+  // will be placed after thumbnail[index], or before all thumbnails if index
+  // is -1. Returns null when the drop slot hasn't changed (no marker update
+  // needed), or [index, space] where space is the gap (in px) between
+  // thumbnails at that slot, used to position the marker.
+  //
+  // positionsX holds the x-center of each column, positionsY the y-center of
+  // each row. positionsLastX holds the x-centers for an incomplete last row
+  // (when the total number of thumbnails is not a multiple of the column
+  // count).
   #findClosestThumbnail(x, y) {
     if (!this.#thumbnailsPositions) {
       this.#computeThumbnailsPosition();
@@ -1167,6 +1226,9 @@ class PDFThumbnailViewer {
       lastSpace: lastSpaceBetweenThumbnails,
     } = this.#thumbnailsPositions;
     const lastDraggedOverIndex = this.#lastDraggedOverIndex;
+
+    // Fast-path: reconstruct the row/col of the previous drop slot and check
+    // whether (x, y) still falls inside the same cell's bounds.
     let xPos = lastDraggedOverIndex % positionsX.length;
     let yPos = Math.floor(lastDraggedOverIndex / positionsX.length);
     let xArray = yPos === positionsY.length - 1 ? positionsLastX : positionsX;
@@ -1180,28 +1242,58 @@ class PDFThumbnailViewer {
       return null;
     }
 
-    yPos = binarySearchFirstItem(positionsY, cy => y < cy) - 1;
-    xArray =
-      yPos === positionsY.length - 1 && positionsLastX.length > 0
-        ? positionsLastX
-        : positionsX;
-    xPos = Math.max(0, binarySearchFirstItem(xArray, cx => x < cx) - 1);
-    if (yPos < 0) {
-      if (xPos <= 0) {
-        xPos = -1;
+    let index;
+    // binarySearchFirstItem returns the first row index whose center is below
+    // y, i.e. the first i such that positionsY[i] > y.
+    yPos = binarySearchFirstItem(positionsY, cy => y < cy);
+    if (this.#isOneColumnView) {
+      // In a single column the drop slot is simply the row boundary: the marker
+      // goes after row (yPos - 1), meaning before row yPos. index = -1 when y
+      // is above the first thumbnail's center (drop before thumbnail 0).
+      index = yPos - 1;
+    } else {
+      // Grid layout: first pick the nearest row, then the nearest column.
+
+      if (yPos === positionsY.length) {
+        // y is below the last row's center — clamp to the last row.
+        yPos = positionsY.length - 1;
+      } else {
+        // Choose between the row just above (yPos - 1) and the row at yPos by
+        // comparing distances, so the marker snaps to whichever row center is
+        // closer to y.
+        const dist1 = Math.abs(positionsY[yPos - 1] - y);
+        const dist2 = Math.abs(positionsY[yPos] - y);
+        yPos = dist1 < dist2 ? yPos - 1 : yPos;
       }
-      yPos = 0;
+      // The last row may be incomplete, so use its own x-center array.
+      xArray =
+        yPos === positionsY.length - 1 && positionsLastX.length > 0
+          ? positionsLastX
+          : positionsX;
+      // Find the column: the first column whose center is to the right of x,
+      // minus 1, gives the column the cursor is in (or -1 if before column 0).
+      xPos = binarySearchFirstItem(xArray, cx => x < cx) - 1;
+      if (yPos < 0) {
+        // y is above the first row: force drop before the very first thumbnail.
+        if (xPos <= 0) {
+          xPos = -1;
+        }
+        yPos = 0;
+      }
+      // Convert (row, col) to a flat thumbnail index, clamped to
+      // [-1, length-1].
+      index = MathClamp(
+        yPos * positionsX.length + xPos,
+        -1,
+        this._thumbnails.length - 1
+      );
     }
-    const index = MathClamp(
-      yPos * positionsX.length + xPos,
-      -1,
-      this._thumbnails.length - 1
-    );
     if (index === lastDraggedOverIndex) {
       // No change.
       return null;
     }
     this.#lastDraggedOverIndex = index;
+    // Use the last-row gap when the drop slot is in the incomplete last row.
     const space =
       yPos === positionsY.length - 1 && positionsLastX.length > 0 && xPos >= 0
         ? lastSpaceBetweenThumbnails
