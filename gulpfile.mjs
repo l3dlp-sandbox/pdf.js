@@ -736,7 +736,7 @@ function runTests(testsName, { bot = false, xfaOnly = false } = {}) {
     }
     if (process.argv.includes("--coverage-output")) {
       args.push(
-        "--coverage-output",
+        "--coverageOutput",
         process.argv[process.argv.indexOf("--coverage-output") + 1]
       );
     }
