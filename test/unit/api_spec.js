@@ -5188,6 +5188,11 @@ have written that much by now. So, here’s to squashing bugs.`);
   });
 
   describe("PDFDataRangeTransport", function () {
+    async function streamDelay() {
+      return new Promise(resolve => {
+        setTimeout(resolve, 250);
+      });
+    }
     let dataPromise;
 
     beforeAll(function () {
@@ -5200,20 +5205,26 @@ have written that much by now. So, here’s to squashing bugs.`);
       dataPromise = null;
     });
 
-    it("should fetch document info and page using ranges", async function () {
-      const initialDataLength = 4000;
+    it("should fetch document info and page using only ranges", async function () {
+      const initialDataLength = 80000; // Larger than `rangeChunkSize`, since otherwise it's pretty pointless.
       const subArrays = [];
       let initialProgress = null;
       let fetches = 0;
 
       const data = await dataPromise;
+      const dataLength = data.length;
       const initialData = new Uint8Array(data.subarray(0, initialDataLength));
       subArrays.push(initialData);
 
-      const transport = new PDFDataRangeTransport(data.length, initialData);
-      transport.requestDataRange = function (begin, end) {
+      const transport = new PDFDataRangeTransport(
+        dataLength,
+        initialData,
+        /* progressiveDone = */ undefined,
+        /* contentDispositionFilename = */ "aaa.pdf"
+      );
+      transport.requestDataRange = (begin, end) => {
         fetches++;
-        waitSome(function () {
+        waitSome(() => {
           const chunk = new Uint8Array(data.subarray(begin, end));
           subArrays.push(chunk);
 
@@ -5221,7 +5232,10 @@ have written that much by now. So, here’s to squashing bugs.`);
         });
       };
 
-      const loadingTask = getDocument({ range: transport });
+      const loadingTask = getDocument({
+        range: transport,
+        rangeChunkSize: 65536,
+      });
       loadingTask.onProgress = evt => {
         initialProgress = evt;
         loadingTask.onProgress = null;
@@ -5232,13 +5246,176 @@ have written that much by now. So, here’s to squashing bugs.`);
 
       const pdfPage = await pdfDocument.getPage(10);
       expect(pdfPage.rotate).toEqual(0);
+
+      const { contentDispositionFilename, contentLength } =
+        await pdfDocument.getMetadata();
+      expect(contentDispositionFilename).toEqual("aaa.pdf");
+      expect(contentLength).toEqual(dataLength);
+
+      expect(fetches).toBeGreaterThan(4);
+
+      expect(initialProgress).toEqual({
+        loaded: initialDataLength,
+        total: dataLength,
+        percent: 8,
+      });
+
+      // Check that the TypedArrays were transferred.
+      for (const array of subArrays) {
+        expect(array.length).toEqual(0);
+      }
+
+      await loadingTask.destroy();
+    });
+
+    it("should fetch document info and page using only streaming", async function () {
+      const initialDataLength = 80000; // Larger than `rangeChunkSize`, since otherwise it's pretty pointless.
+      const subArrays = [];
+      let initialProgress = null;
+      let fetches = 0;
+
+      const data = await dataPromise;
+      const dataLength = data.length;
+      const initialData = new Uint8Array(data.subarray(0, initialDataLength));
+      subArrays.push(initialData);
+
+      const transport = new PDFDataRangeTransport(
+        dataLength,
+        initialData,
+        /* progressiveDone = */ undefined,
+        /* contentDispositionFilename = */ "BBB.PDF"
+      );
+      transport.requestDataRange = (begin, end) => {
+        fetches++; // There should be no range requests, since `disableRange` is used.
+      };
+      async function streamAllData() {
+        const streamChunkSize = 131072;
+        let pos = initialDataLength;
+
+        while (pos < dataLength) {
+          const begin = pos,
+            end = Math.min(pos + streamChunkSize, dataLength);
+          pos = end;
+
+          const chunk = new Uint8Array(data.subarray(begin, end));
+          subArrays.push(chunk);
+
+          transport.onDataProgressiveRead(chunk);
+          await streamDelay();
+        }
+        transport.onDataProgressiveDone();
+      }
+      streamAllData();
+
+      const loadingTask = getDocument({
+        range: transport,
+        rangeChunkSize: 65536,
+        disableRange: true,
+      });
+      loadingTask.onProgress = evt => {
+        initialProgress = evt;
+        loadingTask.onProgress = null;
+      };
+
+      const pdfDocument = await loadingTask.promise;
+      expect(pdfDocument.numPages).toEqual(14);
+
+      const pdfPage = await pdfDocument.getPage(10);
+      expect(pdfPage.rotate).toEqual(0);
+
+      const { contentDispositionFilename, contentLength } =
+        await pdfDocument.getMetadata();
+      expect(contentDispositionFilename).toEqual("BBB.PDF");
+      expect(contentLength).toEqual(dataLength);
+
+      expect(fetches).toEqual(0);
+
+      expect(initialProgress.loaded).toBeGreaterThan(initialDataLength);
+      expect(initialProgress.total).toEqual(dataLength);
+      expect(initialProgress.percent).toBeGreaterThan(8);
+
+      // Check that the TypedArrays were transferred.
+      for (const array of subArrays) {
+        expect(array.length).toEqual(0);
+      }
+
+      await loadingTask.destroy();
+    });
+
+    it("should fetch document info and page using ranges and streaming", async function () {
+      const initialDataLength = 80000; // Larger than `rangeChunkSize`, since otherwise it's pretty pointless.
+      const subArrays = [];
+      let initialProgress = null;
+      let fetches = 0;
+
+      const data = await dataPromise;
+      const dataLength = data.length;
+      const initialData = new Uint8Array(data.subarray(0, initialDataLength));
+      subArrays.push(initialData);
+
+      const transport = new PDFDataRangeTransport(
+        dataLength,
+        initialData,
+        /* progressiveDone = */ undefined,
+        /* contentDispositionFilename = */ ""
+      );
+      transport.requestDataRange = (begin, end) => {
+        fetches++;
+        waitSome(() => {
+          const chunk = new Uint8Array(data.subarray(begin, end));
+          subArrays.push(chunk);
+
+          transport.onDataRange(begin, chunk);
+        });
+      };
+      async function streamPartialData() {
+        const MAX_CHUNKS = 2;
+        let numChunks = 0;
+        const streamChunkSize = 131072;
+        let pos = initialDataLength;
+
+        while (pos < dataLength) {
+          const begin = pos,
+            end = Math.min(pos + streamChunkSize, dataLength);
+          pos = end;
+
+          const chunk = new Uint8Array(data.subarray(begin, end));
+          subArrays.push(chunk);
+
+          transport.onDataProgressiveRead(chunk);
+          if (++numChunks >= MAX_CHUNKS) {
+            break;
+          }
+          await streamDelay();
+        }
+      }
+      streamPartialData();
+
+      const loadingTask = getDocument({
+        range: transport,
+        rangeChunkSize: 65536,
+      });
+      loadingTask.onProgress = evt => {
+        initialProgress = evt;
+        loadingTask.onProgress = null;
+      };
+
+      const pdfDocument = await loadingTask.promise;
+      expect(pdfDocument.numPages).toEqual(14);
+
+      const pdfPage = await pdfDocument.getPage(10);
+      expect(pdfPage.rotate).toEqual(0);
+
+      const { contentDispositionFilename, contentLength } =
+        await pdfDocument.getMetadata();
+      expect(contentDispositionFilename).toEqual(null);
+      expect(contentLength).toEqual(dataLength);
+
       expect(fetches).toBeGreaterThan(2);
 
-      expect(initialProgress).toEqual({
-        loaded: initialDataLength,
-        total: data.length,
-        percent: 0,
-      });
+      expect(initialProgress.loaded).toBeGreaterThan(initialDataLength);
+      expect(initialProgress.total).toEqual(dataLength);
+      expect(initialProgress.percent).toBeGreaterThan(8);
 
       // Check that the TypedArrays were transferred.
       for (const array of subArrays) {
@@ -5248,35 +5425,30 @@ have written that much by now. So, here’s to squashing bugs.`);
       await loadingTask.destroy();
     });
 
-    it("should fetch document info and page using range and streaming", async function () {
-      const initialDataLength = 4000;
+    it("should fetch document info and page, without ranges, using complete initialData", async function () {
       const subArrays = [];
       let initialProgress = null;
       let fetches = 0;
 
       const data = await dataPromise;
-      const initialData = new Uint8Array(data.subarray(0, initialDataLength));
+      const dataLength = data.length;
+      const initialData = new Uint8Array(data);
       subArrays.push(initialData);
 
-      const transport = new PDFDataRangeTransport(data.length, initialData);
-      transport.requestDataRange = function (begin, end) {
-        fetches++;
-        if (fetches === 1) {
-          const chunk = new Uint8Array(data.subarray(initialDataLength));
-          subArrays.push(chunk);
-
-          // Send rest of the data on first range request.
-          transport.onDataProgressiveRead(chunk);
-        }
-        waitSome(function () {
-          const chunk = new Uint8Array(data.subarray(begin, end));
-          subArrays.push(chunk);
-
-          transport.onDataRange(begin, chunk);
-        });
+      const transport = new PDFDataRangeTransport(
+        dataLength,
+        initialData,
+        /* progressiveDone = */ true,
+        /* contentDispositionFilename = */ "pdf.txt"
+      );
+      transport.requestDataRange = (begin, end) => {
+        fetches++; // There should be no range requests, since `initialData` is complete.
       };
 
-      const loadingTask = getDocument({ range: transport });
+      const loadingTask = getDocument({
+        range: transport,
+        rangeChunkSize: 65536,
+      });
       loadingTask.onProgress = evt => {
         initialProgress = evt;
         loadingTask.onProgress = null;
@@ -5287,16 +5459,18 @@ have written that much by now. So, here’s to squashing bugs.`);
 
       const pdfPage = await pdfDocument.getPage(10);
       expect(pdfPage.rotate).toEqual(0);
-      expect(fetches).toEqual(1);
+
+      const { contentDispositionFilename, contentLength } =
+        await pdfDocument.getMetadata();
+      expect(contentDispositionFilename).toEqual(null);
+      expect(contentLength).toEqual(dataLength);
+
+      expect(fetches).toEqual(0);
 
       expect(initialProgress).toEqual({
-        loaded: initialDataLength,
-        total: data.length,
-        percent: 0,
-      });
-
-      await new Promise(resolve => {
-        waitSome(resolve);
+        loaded: dataLength,
+        total: dataLength,
+        percent: 100,
       });
 
       // Check that the TypedArrays were transferred.
@@ -5306,58 +5480,6 @@ have written that much by now. So, here’s to squashing bugs.`);
 
       await loadingTask.destroy();
     });
-
-    it(
-      "should fetch document info and page, without range, " +
-        "using complete initialData",
-      async function () {
-        const subArrays = [];
-        let initialProgress = null;
-        let fetches = 0;
-
-        const data = await dataPromise;
-        const initialData = new Uint8Array(data);
-        subArrays.push(initialData);
-
-        const transport = new PDFDataRangeTransport(
-          data.length,
-          initialData,
-          /* progressiveDone = */ true
-        );
-        transport.requestDataRange = function (begin, end) {
-          fetches++;
-        };
-
-        const loadingTask = getDocument({
-          disableRange: true,
-          range: transport,
-        });
-        loadingTask.onProgress = evt => {
-          initialProgress = evt;
-          loadingTask.onProgress = null;
-        };
-
-        const pdfDocument = await loadingTask.promise;
-        expect(pdfDocument.numPages).toEqual(14);
-
-        const pdfPage = await pdfDocument.getPage(10);
-        expect(pdfPage.rotate).toEqual(0);
-        expect(fetches).toEqual(0);
-
-        expect(initialProgress).toEqual({
-          loaded: data.length,
-          total: data.length,
-          percent: 100,
-        });
-
-        // Check that the TypedArrays were transferred.
-        for (const array of subArrays) {
-          expect(array.length).toEqual(0);
-        }
-
-        await loadingTask.destroy();
-      }
-    );
   });
 
   describe("Annotations", function () {
