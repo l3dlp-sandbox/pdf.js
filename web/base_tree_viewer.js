@@ -16,7 +16,6 @@
 import { removeNullCharacters } from "./ui_utils.js";
 import { stopEvent } from "pdfjs-lib";
 
-const TREEITEM_OFFSET_TOP = -100; // px
 const TREEITEM_SELECTED_CLASS = "selected";
 
 class BaseTreeViewer {
@@ -185,10 +184,12 @@ class BaseTreeViewer {
 
     this._updateCurrentTreeItem(treeItem);
 
-    this.container.scrollTo(
-      treeItem.offsetLeft,
-      treeItem.offsetTop + TREEITEM_OFFSET_TOP
-    );
+    treeItem.scrollIntoView({
+      behavior: "instant",
+      block: "center",
+      inline: "center",
+      container: "nearest",
+    });
   }
 }
 
